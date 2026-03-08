@@ -19,21 +19,32 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-if (!process.env.DATABASE_URL) {
-  console.error("ERROR: DATABASE_URL is not set. See README for Railway setup instructions.");
-  process.exit(1);
-}
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
 app.use(cors({
-  origin: [
-    process.env.ADMIN_PORTAL_URL || "*", // your Railway admin portal URL
-    /\.gymdesk\.com$/,                   // allow all gymdesk subdomains
-  ],
+  origin: (origin, callback) => {
+    const allowed = [
+      process.env.ADMIN_PORTAL_URL,
+      /\.gymdesk\.com$/,
+    ].filter(Boolean);
+
+    // Allow requests with no origin (e.g. curl, widget.js script tag)
+    if (!origin) return callback(null, true);
+
+    const isAllowed = allowed.some(a =>
+      a instanceof RegExp ? a.test(origin) : a === origin
+    );
+
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      console.warn(`CORS blocked origin: ${origin}`);
+      callback(null, false);
+    }
+  },
   methods: ["GET", "POST"],
   allowedHeaders: ["Content-Type", "x-admin-key"],
 }));
@@ -51,8 +62,16 @@ const requireAdminKey = (req, res, next) => {
 
 // ─── Database Setup ───────────────────────────────────────────────────────────
 
+// Bail early with a clear message if DATABASE_URL is missing or still a placeholder
+const dbUrl = process.env.DATABASE_URL;
+if (!dbUrl || dbUrl.includes("user:password@host")) {
+  console.error("❌ DATABASE_URL is missing or still set to the placeholder value.");
+  console.error("   Set the real DATABASE_URL in your Railway environment variables.");
+  process.exit(1);
+}
+
 const db = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: dbUrl,
   ssl: { rejectUnauthorized: false },
 });
 

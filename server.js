@@ -3,11 +3,18 @@
  * Runs on Railway as a Node.js/Express server.
  *
  * Routes:
- *   GET  /api/reviews          — fetch reviews from Google Places
- *   GET  /api/config           — load widget config from DB
- *   POST /api/config           — save widget config to DB
- *   POST /api/ai-pick          — call Claude to pick best reviews
- *   GET  /widget.js            — serve embeddable widget script
+ *   GET  /api/system/capabilities  — report which optional features are available
+ *   GET  /api/reviews              — fetch reviews (Google Places live OR Outscraper cache)
+ *   GET  /api/reviews/cache-status — last refresh timestamp, source, and failure info
+ *   POST /api/reviews/refresh      — manually trigger an Outscraper fetch and cache update
+ *   POST /api/reviews/pin          — toggle pinned state for a review
+ *   GET  /api/config               — load widget config from DB
+ *   POST /api/config               — save widget config to DB
+ *   POST /api/ai-pick              — call Claude to pick best reviews
+ *   GET  /widget.js                — serve embeddable widget script
+ *
+ * Open Source — MIT License
+ * https://github.com/your-org/reviews-widget
  */
 
 import express from "express";
@@ -16,6 +23,7 @@ import pg from "pg";
 import fetch from "node-fetch";
 import Anthropic from "@anthropic-ai/sdk";
 import dotenv from "dotenv";
+import cron from "node-cron";
 
 dotenv.config();
 
@@ -75,6 +83,33 @@ async function initDB() {
       ai_picked   BOOLEAN DEFAULT FALSE,
       created_at  TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS review_cache (
+      id             SERIAL PRIMARY KEY,
+      reviews        JSONB NOT NULL,
+      overall_rating NUMERIC,
+      total_reviews  INTEGER,
+      source         TEXT NOT NULL DEFAULT 'outscraper',
+      fetched_at     TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS review_cache_backup (
+      id             SERIAL PRIMARY KEY,
+      reviews        JSONB NOT NULL,
+      overall_rating NUMERIC,
+      total_reviews  INTEGER,
+      source         TEXT NOT NULL DEFAULT 'outscraper',
+      fetched_at     TIMESTAMPTZ
+    );
+
+    CREATE TABLE IF NOT EXISTS refresh_log (
+      id            SERIAL PRIMARY KEY,
+      success       BOOLEAN NOT NULL,
+      error_message TEXT,
+      source        TEXT,
+      review_count  INTEGER,
+      created_at    TIMESTAMPTZ DEFAULT NOW()
+    );
   `);
   console.log("✅ Database tables ready");
 }
@@ -83,8 +118,7 @@ async function initDB() {
 
 /**
  * Fetches up to 5 reviews from Google Places API for a given Place ID.
- * Note: The free Places API returns max 5 reviews. For more, you'd need
- * a third-party scraping service or a paid Places data provider.
+ * Note: The free Places API returns max 5 reviews. For more, use Outscraper.
  */
 async function fetchGoogleReviews() {
   const placeId = process.env.GOOGLE_PLACE_ID;
@@ -109,7 +143,7 @@ async function fetchGoogleReviews() {
 
   const place   = data.result;
   const reviews = (place.reviews || []).map(r => ({
-    id:       r.time.toString(),      // use Unix timestamp as stable ID
+    id:       r.time.toString(),
     author:   r.author_name,
     avatar:   r.profile_photo_url || null,
     rating:   r.rating,
@@ -126,101 +160,126 @@ async function fetchGoogleReviews() {
   };
 }
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
+// ─── Outscraper Helper ────────────────────────────────────────────────────────
 
 /**
- * GET /api/reviews
- * Fetches live reviews from Google, merges in pinned/aiPicked state from DB.
+ * Fetches all reviews from Outscraper for a given Place ID.
+ * Requires OUTSCRAPER_API_KEY env var.
+ * OUTSCRAPER_MAX_REVIEWS controls the cap (default 300).
  */
-app.get("/api/reviews", async (req, res) => {
-  try {
-    const { reviews, overallRating, totalReviews } = await fetchGoogleReviews();
+async function fetchOutscraperReviews() {
+  const apiKey  = process.env.OUTSCRAPER_API_KEY;
+  const placeId = process.env.GOOGLE_PLACE_ID;
+  const limit   = parseInt(process.env.OUTSCRAPER_MAX_REVIEWS || "300", 10);
 
-    // Load pinned/ai state from DB
-    const { rows } = await db.query("SELECT * FROM pinned_reviews");
-    const stateMap  = Object.fromEntries(rows.map(r => [r.review_id, r]));
+  if (!apiKey)  throw new Error("OUTSCRAPER_API_KEY is not set");
+  if (!placeId) throw new Error("GOOGLE_PLACE_ID is not set");
 
-    // Merge state into reviews
-    const merged = reviews.map(r => ({
-      ...r,
-      pinned:   stateMap[r.id]?.pinned   ?? false,
-      aiPicked: stateMap[r.id]?.ai_picked ?? false,
-    }));
+  const url = new URL("https://api.app.outscraper.com/maps/reviews-v3");
+  url.searchParams.set("query", placeId);
+  url.searchParams.set("reviewsLimit", String(limit));
+  url.searchParams.set("sort", "newest");
+  url.searchParams.set("async", "false");
 
-    res.json({ reviews: merged, overallRating, totalReviews });
-  } catch (err) {
-    console.error("Error fetching reviews:", err.message);
-    res.status(500).json({ error: err.message });
+  const res = await fetch(url.toString(), {
+    headers: { "X-API-KEY": apiKey },
+    timeout: 60000,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Outscraper API error ${res.status}: ${text}`);
   }
-});
+
+  const body  = await res.json();
+  // Outscraper wraps results in a { data: [...] } envelope
+  const place = (body.data || body)[0];
+
+  if (!place) throw new Error("No data returned from Outscraper");
+
+  const reviews = (place.reviews_data || []).map(r => ({
+    id:       r.review_id || String(r.review_datetime_utc),
+    author:   r.author_title,
+    avatar:   r.author_image || null,
+    rating:   r.review_rating,
+    date:     r.review_datetime_utc
+                ? r.review_datetime_utc.split(" ")[0]
+                : "",
+    text:     r.review_text || "",
+    pinned:   false,
+    aiPicked: false,
+  }));
+
+  return {
+    reviews,
+    overallRating: place.rating,
+    totalReviews:  place.reviews,
+  };
+}
+
+// ─── Cache Helpers ────────────────────────────────────────────────────────────
+
+async function getCache() {
+  const { rows } = await db.query(
+    "SELECT * FROM review_cache ORDER BY fetched_at DESC LIMIT 1"
+  );
+  if (!rows.length) return null;
+  const row = rows[0];
+  return {
+    reviews:       row.reviews,
+    overallRating: row.overall_rating,
+    totalReviews:  row.total_reviews,
+    source:        row.source,
+    fetchedAt:     row.fetched_at,
+  };
+}
 
 /**
- * POST /api/reviews/pin
- * Body: { reviewId: string, pinned: boolean }
- * Toggles pinned state for a review.
+ * Fetches fresh reviews from Outscraper, backs up the current cache,
+ * and saves the new data. On failure the existing cache is preserved.
  */
-app.post("/api/reviews/pin", requireAdminKey, async (req, res) => {
-  const { reviewId, pinned } = req.body;
-  if (!reviewId || typeof pinned !== "boolean") {
-    return res.status(400).json({ error: "reviewId and pinned (boolean) required" });
-  }
-  await db.query(`
-    INSERT INTO pinned_reviews (review_id, pinned)
-    VALUES ($1, $2)
-    ON CONFLICT (review_id) DO UPDATE SET pinned = $2
-  `, [reviewId, pinned]);
-  res.json({ success: true });
-});
+async function runRefresh() {
+  // Fetch first — only touch the DB if the fetch succeeds
+  const { reviews, overallRating, totalReviews } = await fetchOutscraperReviews();
 
-/**
- * GET /api/config
- * Returns the current widget configuration.
- */
-app.get("/api/config", async (req, res) => {
-  try {
-    const { rows } = await db.query(
-      "SELECT value FROM widget_config WHERE key = 'main'"
+  // Backup existing cache (keep exactly 1 previous snapshot)
+  const current = await getCache();
+  if (current) {
+    await db.query("DELETE FROM review_cache_backup");
+    await db.query(
+      `INSERT INTO review_cache_backup
+         (reviews, overall_rating, total_reviews, source, fetched_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [JSON.stringify(current.reviews), current.overallRating,
+       current.totalReviews, current.source, current.fetchedAt]
     );
-    if (rows.length === 0) {
-      // Return sensible defaults if no config saved yet
-      return res.json(defaultConfig());
-    }
-    res.json(rows[0].value);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
   }
-});
+
+  // Replace cache
+  await db.query("DELETE FROM review_cache");
+  await db.query(
+    `INSERT INTO review_cache (reviews, overall_rating, total_reviews, source)
+     VALUES ($1, $2, $3, 'outscraper')`,
+    [JSON.stringify(reviews), overallRating, totalReviews]
+  );
+
+  // Log success
+  await db.query(
+    "INSERT INTO refresh_log (success, source, review_count) VALUES (TRUE, 'outscraper', $1)",
+    [reviews.length]
+  );
+
+  console.log(`✅ Outscraper refresh complete: ${reviews.length} reviews cached`);
+  return { reviewCount: reviews.length };
+}
+
+// ─── AI Pick Helper ───────────────────────────────────────────────────────────
 
 /**
- * POST /api/config
- * Body: { ...configObject }
- * Saves widget config to DB.
+ * Runs Claude AI pick on the provided reviews array.
+ * Saves ai_picked state to DB and returns { picks, reasoning }.
  */
-app.post("/api/config", requireAdminKey, async (req, res) => {
-  try {
-    const config = req.body;
-    await db.query(`
-      INSERT INTO widget_config (key, value, updated_at)
-      VALUES ('main', $1, NOW())
-      ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()
-    `, [JSON.stringify(config)]);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * POST /api/ai-pick
- * Body: { reviews: Review[] }
- * Calls Claude to select the highest-converting reviews.
- */
-app.post("/api/ai-pick", requireAdminKey, async (req, res) => {
-  const { reviews } = req.body;
-  if (!reviews?.length) {
-    return res.status(400).json({ error: "reviews array required" });
-  }
-
+async function runAiPick(reviews) {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   const prompt = `You are a conversion optimization expert for a martial arts / BJJ gym.
@@ -244,33 +303,208 @@ Respond ONLY with a valid JSON object — no markdown, no preamble:
   "reasoning": "One paragraph explaining your selections and what makes them high-converting."
 }`;
 
+  const message = await client.messages.create({
+    model:      "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    messages:   [{ role: "user", content: prompt }],
+  });
+
+  const text   = message.content.map(b => b.text || "").join("");
+  const parsed = JSON.parse(text.trim());
+
+  // Clear existing AI picks then set new ones
+  await db.query("UPDATE pinned_reviews SET ai_picked = FALSE");
+  for (const pickNum of parsed.picks) {
+    const review = reviews[pickNum - 1];
+    if (review) {
+      await db.query(`
+        INSERT INTO pinned_reviews (review_id, ai_picked)
+        VALUES ($1, TRUE)
+        ON CONFLICT (review_id) DO UPDATE SET ai_picked = TRUE
+      `, [review.id]);
+    }
+  }
+
+  return parsed;
+}
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/system/capabilities
+ * Tells the frontend which optional features are available on this deployment.
+ */
+app.get("/api/system/capabilities", (_req, res) => {
+  res.json({
+    outscraperAvailable: !!process.env.OUTSCRAPER_API_KEY,
+  });
+});
+
+/**
+ * GET /api/reviews
+ * If source is 'outscraper': serve from cache merged with pinned state.
+ * If source is 'google': fetch live from Google Places.
+ */
+app.get("/api/reviews", async (req, res) => {
   try {
-    const message = await client.messages.create({
-      model:      "claude-sonnet-4-20250514",
-      max_tokens: 1024,
-      messages:   [{ role: "user", content: prompt }],
+    const { rows: cfgRows } = await db.query(
+      "SELECT value FROM widget_config WHERE key = 'main'"
+    );
+    const source = cfgRows[0]?.value?.reviewSource || "google";
+
+    let reviews, overallRating, totalReviews;
+
+    if (source === "outscraper") {
+      const cache = await getCache();
+      if (!cache) {
+        return res.json({ reviews: [], overallRating: null, totalReviews: null, cacheEmpty: true });
+      }
+      reviews       = cache.reviews;
+      overallRating = cache.overallRating;
+      totalReviews  = cache.totalReviews;
+    } else {
+      ({ reviews, overallRating, totalReviews } = await fetchGoogleReviews());
+    }
+
+    // Merge pinned/ai state from DB
+    const { rows } = await db.query("SELECT * FROM pinned_reviews");
+    const stateMap  = Object.fromEntries(rows.map(r => [r.review_id, r]));
+    const merged    = reviews.map(r => ({
+      ...r,
+      pinned:   stateMap[r.id]?.pinned   ?? false,
+      aiPicked: stateMap[r.id]?.ai_picked ?? false,
+    }));
+
+    res.json({ reviews: merged, overallRating, totalReviews });
+  } catch (err) {
+    console.error("Error fetching reviews:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/reviews/cache-status
+ * Returns info about the last Outscraper fetch: timestamp, success, error.
+ */
+app.get("/api/reviews/cache-status", async (_req, res) => {
+  try {
+    const cache = await getCache();
+
+    const { rows: logRows } = await db.query(
+      "SELECT * FROM refresh_log ORDER BY created_at DESC LIMIT 1"
+    );
+    const lastLog = logRows[0] || null;
+
+    res.json({
+      outscraperAvailable: !!process.env.OUTSCRAPER_API_KEY,
+      hasCachedData:       !!cache,
+      fetchedAt:           cache?.fetchedAt || null,
+      reviewCount:         cache?.reviews?.length || 0,
+      lastRefreshSuccess:  lastLog?.success ?? null,
+      lastRefreshError:    lastLog?.success === false ? lastLog.error_message : null,
+      lastRefreshAt:       lastLog?.created_at || null,
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    const text   = message.content.map(b => b.text || "").join("");
-    const parsed = JSON.parse(text.trim());
+/**
+ * POST /api/reviews/refresh
+ * Manually triggers an Outscraper fetch and updates the cache.
+ */
+app.post("/api/reviews/refresh", requireAdminKey, async (_req, res) => {
+  try {
+    const { reviewCount } = await runRefresh();
+    res.json({ success: true, reviewCount });
+  } catch (err) {
+    // Log the failure
+    await db.query(
+      "INSERT INTO refresh_log (success, error_message, source) VALUES (FALSE, $1, 'outscraper')",
+      [err.message]
+    ).catch(() => {});
+    console.error("Manual refresh failed:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    // Save ai_picked state to DB
-    // First clear existing AI picks
-    await db.query("UPDATE pinned_reviews SET ai_picked = FALSE");
+/**
+ * POST /api/reviews/pin
+ * Body: { reviewId: string, pinned: boolean }
+ */
+app.post("/api/reviews/pin", requireAdminKey, async (req, res) => {
+  const { reviewId, pinned } = req.body;
+  if (!reviewId || typeof pinned !== "boolean") {
+    return res.status(400).json({ error: "reviewId and pinned (boolean) required" });
+  }
+  await db.query(`
+    INSERT INTO pinned_reviews (review_id, pinned)
+    VALUES ($1, $2)
+    ON CONFLICT (review_id) DO UPDATE SET pinned = $2
+  `, [reviewId, pinned]);
+  res.json({ success: true });
+});
 
-    // Set new picks (1-indexed from Claude → 0-indexed for array)
-    for (const pickNum of parsed.picks) {
-      const review = reviews[pickNum - 1];
-      if (review) {
-        await db.query(`
-          INSERT INTO pinned_reviews (review_id, ai_picked)
-          VALUES ($1, TRUE)
-          ON CONFLICT (review_id) DO UPDATE SET ai_picked = TRUE
-        `, [review.id]);
+/**
+ * GET /api/config
+ */
+app.get("/api/config", async (_req, res) => {
+  try {
+    const { rows } = await db.query(
+      "SELECT value FROM widget_config WHERE key = 'main'"
+    );
+    if (rows.length === 0) return res.json(defaultConfig());
+    res.json(rows[0].value);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/config
+ */
+app.post("/api/config", requireAdminKey, async (req, res) => {
+  try {
+    const config = req.body;
+    await db.query(`
+      INSERT INTO widget_config (key, value, updated_at)
+      VALUES ('main', $1, NOW())
+      ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()
+    `, [JSON.stringify(config)]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/ai-pick
+ * If source is 'outscraper', uses all cached reviews.
+ * If source is 'google', uses the reviews array from the request body.
+ */
+app.post("/api/ai-pick", requireAdminKey, async (req, res) => {
+  try {
+    const { rows: cfgRows } = await db.query(
+      "SELECT value FROM widget_config WHERE key = 'main'"
+    );
+    const source = cfgRows[0]?.value?.reviewSource || "google";
+
+    let reviews;
+    if (source === "outscraper") {
+      const cache = await getCache();
+      if (!cache || !cache.reviews?.length) {
+        return res.status(400).json({ error: "No cached reviews. Run a refresh first." });
+      }
+      reviews = cache.reviews;
+    } else {
+      reviews = req.body.reviews;
+      if (!reviews?.length) {
+        return res.status(400).json({ error: "reviews array required" });
       }
     }
 
-    res.json(parsed);
+    const result = await runAiPick(reviews);
+    res.json(result);
   } catch (err) {
     console.error("Claude API error:", err.message);
     res.status(500).json({ error: "AI pick failed: " + err.message });
@@ -280,16 +514,13 @@ Respond ONLY with a valid JSON object — no markdown, no preamble:
 /**
  * GET /widget.js
  * Serves the embeddable widget script.
- * This script is what gym owners paste into their GymDesk site.
  */
 app.get("/widget.js", async (req, res) => {
   res.setHeader("Content-Type", "application/javascript");
-  res.setHeader("Cache-Control", "public, max-age=300"); // 5 min cache
+  res.setHeader("Cache-Control", "public, max-age=300");
 
   const apiBase = process.env.API_BASE_URL || `https://your-app.up.railway.app`;
 
-  // The widget script is inlined here as a template string.
-  // It fetches config + reviews from this server and renders itself.
   res.send(`
 (function() {
   const API = "${apiBase}";
@@ -407,24 +638,63 @@ app.get("/widget.js", async (req, res) => {
   `.trim());
 });
 
+// ─── Weekly Cron ──────────────────────────────────────────────────────────────
+
+// Runs every Sunday at 2am. Checks config at runtime so toggling the setting
+// takes effect without a redeploy.
+cron.schedule("0 2 * * 0", async () => {
+  try {
+    const { rows } = await db.query(
+      "SELECT value FROM widget_config WHERE key = 'main'"
+    );
+    const config = rows[0]?.value || {};
+
+    if (config.reviewSource !== "outscraper" || config.refreshSchedule !== "weekly") {
+      return; // Weekly refresh not enabled
+    }
+
+    console.log("🕐 Weekly review refresh starting...");
+    await runRefresh();
+
+    if (config.autoAiPick) {
+      console.log("🤖 Running auto AI pick after weekly refresh...");
+      const cache = await getCache();
+      if (cache?.reviews?.length) {
+        await runAiPick(cache.reviews);
+        console.log("✅ Auto AI pick complete");
+      }
+    }
+  } catch (err) {
+    console.error("❌ Weekly refresh error:", err.message);
+    // Log failure to DB so the portal can show the warning banner
+    await db.query(
+      "INSERT INTO refresh_log (success, error_message, source) VALUES (FALSE, $1, 'outscraper')",
+      [err.message]
+    ).catch(() => {});
+  }
+});
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function defaultConfig() {
   return {
-    accentColor:  "#C41E3A",
-    bgColor:      "#ffffff",
-    textColor:    "#1a1a1a",
-    showStars:    true,
-    showPhoto:    true,
-    showName:     true,
-    showBadge:    true,
-    displayStyle: "carousel",
-    maxReviews:   6,
-    minRating:    4,
-    ctaEnabled:   true,
-    ctaText:      "Book Your Free Trial",
-    ctaLink:      "#",
-    ctaColor:     "#C41E3A",
+    accentColor:     "#C41E3A",
+    bgColor:         "#ffffff",
+    textColor:       "#1a1a1a",
+    showStars:       true,
+    showPhoto:       true,
+    showName:        true,
+    showBadge:       true,
+    displayStyle:    "carousel",
+    maxReviews:      6,
+    minRating:       4,
+    ctaEnabled:      true,
+    ctaText:         "Book Your Free Trial",
+    ctaLink:         "#",
+    ctaColor:        "#C41E3A",
+    reviewSource:    "google",
+    refreshSchedule: "manual",
+    autoAiPick:      false,
   };
 }
 

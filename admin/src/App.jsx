@@ -1,8 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-// In production, set this to your Railway backend URL via an env var.
-// If you're running the portal locally, use http://localhost:3000
 const API_BASE = import.meta.env?.VITE_API_BASE_URL ?? "https://your-app.up.railway.app";
 const ADMIN_KEY = import.meta.env?.VITE_ADMIN_API_KEY ?? "";
 
@@ -35,44 +33,81 @@ const Stars = ({ rating }) => (
   </div>
 );
 
+function timeAgo(dateStr) {
+  if (!dateStr) return null;
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins  = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days  = Math.floor(diff / 86400000);
+  if (mins < 2)   return "just now";
+  if (mins < 60)  return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  return `${days}d ago`;
+}
+
 const defaultConfig = {
-  accentColor: "#C41E3A", bgColor: "#ffffff", textColor: "#1a1a1a",
-  showStars: true, showPhoto: true, showName: true, showBadge: true,
-  displayStyle: "carousel", maxReviews: 6, minRating: 4,
-  ctaEnabled: true, ctaText: "Book Your Free Trial", ctaLink: "#", ctaColor: "#C41E3A",
+  accentColor:     "#C41E3A",
+  bgColor:         "#ffffff",
+  textColor:       "#1a1a1a",
+  showStars:       true,
+  showPhoto:       true,
+  showName:        true,
+  showBadge:       true,
+  displayStyle:    "carousel",
+  maxReviews:      6,
+  minRating:       4,
+  ctaEnabled:      true,
+  ctaText:         "Book Your Free Trial",
+  ctaLink:         "#",
+  ctaColor:        "#C41E3A",
+  reviewSource:    "google",
+  refreshSchedule: "manual",
+  autoAiPick:      false,
 };
 
-const TABS = ["Reviews", "Appearance", "Embed"];
+const TABS = ["Reviews", "Appearance", "Settings", "Embed"];
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [tab, setTab]               = useState("Reviews");
-  const [reviews, setReviews]       = useState([]);
-  const [meta, setMeta]             = useState({ overallRating: null, totalReviews: null });
-  const [config, setConfig]         = useState(defaultConfig);
-  const [loading, setLoading]       = useState(true);
-  const [saving, setSaving]         = useState(false);
-  const [aiLoading, setAiLoading]   = useState(false);
-  const [aiNote, setAiNote]         = useState(null);
-  const [toast, setToast]           = useState(null);
-  const [previewMode, setPreviewMode] = useState("desktop");
+  const [tab, setTab]                   = useState("Reviews");
+  const [reviews, setReviews]           = useState([]);
+  const [meta, setMeta]                 = useState({ overallRating: null, totalReviews: null });
+  const [config, setConfig]             = useState(defaultConfig);
+  const [loading, setLoading]           = useState(true);
+  const [saving, setSaving]             = useState(false);
+  const [aiLoading, setAiLoading]       = useState(false);
+  const [aiNote, setAiNote]             = useState(null);
+  const [toast, setToast]               = useState(null);
+  const [previewMode, setPreviewMode]   = useState("desktop");
+  const [cacheStatus, setCacheStatus]   = useState(null);
+  const [refreshing, setRefreshing]     = useState(false);
+  const [capabilities, setCapabilities] = useState({ outscraperAvailable: false });
 
   const showToast = (msg, type = "success") => {
     setToast({ msg, type });
-    setTimeout(() => setToast(null), 3000);
+    setTimeout(() => setToast(null), 4000);
   };
 
-  // Load reviews + config on mount
+  const loadCacheStatus = useCallback(async () => {
+    try {
+      const status = await api.get("/api/reviews/cache-status");
+      setCacheStatus(status);
+    } catch {}
+  }, []);
+
+  // Load reviews + config + capabilities on mount
   useEffect(() => {
     (async () => {
       try {
-        const [revData, cfgData] = await Promise.all([
+        const [revData, cfgData, caps] = await Promise.all([
           api.get("/api/reviews"),
           api.get("/api/config"),
+          api.get("/api/system/capabilities"),
         ]);
         setReviews(revData.reviews || []);
         setMeta({ overallRating: revData.overallRating, totalReviews: revData.totalReviews });
         setConfig({ ...defaultConfig, ...cfgData });
+        setCapabilities(caps);
       } catch (e) {
         showToast("Failed to load data from API. Check API_BASE URL.", "error");
       } finally {
@@ -81,27 +116,73 @@ export default function App() {
     })();
   }, []);
 
+  // Load cache status whenever we know source is outscraper
+  useEffect(() => {
+    if (config.reviewSource === "outscraper") {
+      loadCacheStatus();
+    }
+  }, [config.reviewSource, loadCacheStatus]);
+
   const togglePin = async (id, currentPinned) => {
     const newPinned = !currentPinned;
     setReviews(rs => rs.map(r => r.id === id ? { ...r, pinned: newPinned } : r));
     try {
       await api.post("/api/reviews/pin", { reviewId: id, pinned: newPinned });
     } catch {
-      // revert on failure
       setReviews(rs => rs.map(r => r.id === id ? { ...r, pinned: currentPinned } : r));
       showToast("Failed to update pin.", "error");
     }
   };
 
-  const saveConfig = async () => {
+  const saveConfig = async (overrides = {}) => {
     setSaving(true);
+    const updated = { ...config, ...overrides };
     try {
-      await api.post("/api/config", config);
+      await api.post("/api/config", updated);
       showToast("Widget settings saved!");
     } catch {
       showToast("Failed to save settings.", "error");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSourceToggle = async (newSource) => {
+    if (newSource === "outscraper" && !capabilities.outscraperAvailable) {
+      showToast("Outscraper is unavailable — set OUTSCRAPER_API_KEY on the server first.", "error");
+      return;
+    }
+    const prev = config.reviewSource;
+    setConfig(c => ({ ...c, reviewSource: newSource }));
+    try {
+      await api.post("/api/config", { ...config, reviewSource: newSource });
+      // Reload reviews with new source
+      const revData = await api.get("/api/reviews");
+      setReviews(revData.reviews || []);
+      setMeta({ overallRating: revData.overallRating, totalReviews: revData.totalReviews });
+      if (newSource === "outscraper") loadCacheStatus();
+      showToast(`Switched to ${newSource === "outscraper" ? "Outscraper" : "Google Places"}.`);
+    } catch (err) {
+      // Revert on failure
+      setConfig(c => ({ ...c, reviewSource: prev }));
+      showToast(`Switch failed: ${err.message}`, "error");
+    }
+  };
+
+  const runRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const result = await api.post("/api/reviews/refresh", {});
+      showToast(`Refresh complete — ${result.reviewCount} reviews cached.`);
+      const revData = await api.get("/api/reviews");
+      setReviews(revData.reviews || []);
+      setMeta({ overallRating: revData.overallRating, totalReviews: revData.totalReviews });
+      await loadCacheStatus();
+    } catch (err) {
+      showToast(`Refresh failed: ${err.message}`, "error");
+      await loadCacheStatus();
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -111,7 +192,6 @@ export default function App() {
     try {
       const res = await api.post("/api/ai-pick", { reviews });
       setAiNote(res.reasoning);
-      // Refresh reviews to get updated ai_picked state
       const revData = await api.get("/api/reviews");
       setReviews(revData.reviews || []);
       showToast("AI picks updated!");
@@ -129,8 +209,8 @@ export default function App() {
 
   const cfg = (key, val) => setConfig(c => ({ ...c, [key]: val }));
 
-  const pinnedCount = reviews.filter(r => r.pinned).length;
-  const aiCount     = reviews.filter(r => r.aiPicked).length;
+  const pinnedCount    = reviews.filter(r => r.pinned).length;
+  const aiCount        = reviews.filter(r => r.aiPicked).length;
   const visibleReviews = reviews.filter(r => r.rating >= config.minRating).slice(0, config.maxReviews);
 
   if (loading) return (
@@ -143,7 +223,7 @@ export default function App() {
   );
 
   return (
-    <div style={{ fontFamily: "'Inter', system-ui, sans-serif", background: "#0f0f0f", minHeight: "100vh", color: "#e5e5e5" }}>
+    <div style={{ fontFamily: "'Inter', system-ui, sans-serif", background: "#0f0f0f", minHeight: "100vh", color: "#e5e5e5", display: "flex", flexDirection: "column" }}>
 
       {/* Toast */}
       {toast && (
@@ -168,11 +248,58 @@ export default function App() {
         </div>
       </div>
 
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 16px" }}>
+      <div style={{ flex: 1, maxWidth: 1100, margin: "0 auto", padding: "24px 16px", width: "100%" }}>
 
         {/* REVIEWS TAB */}
         {tab === "Reviews" && (
           <div>
+            {/* Source bar */}
+            <div style={{ background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 10, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 1 }}>Data Source</span>
+              <div style={{ display: "flex", gap: 6 }}>
+                {[["google", "Google Places"], ["outscraper", "Outscraper"]].map(([val, label]) => {
+                  const disabled = val === "outscraper" && !capabilities.outscraperAvailable;
+                  return (
+                    <button
+                      key={val}
+                      onClick={() => !disabled && handleSourceToggle(val)}
+                      title={disabled ? "Set OUTSCRAPER_API_KEY on the server to enable this option." : undefined}
+                      style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${config.reviewSource === val ? config.accentColor : "#444"}`, background: config.reviewSource === val ? config.accentColor + "22" : "transparent", color: disabled ? "#555" : config.reviewSource === val ? config.accentColor : "#aaa", fontSize: 12, fontWeight: 600, cursor: disabled ? "not-allowed" : "pointer" }}
+                    >
+                      {label}{disabled ? " (unavailable)" : ""}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {config.reviewSource === "outscraper" && (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: "auto", flexWrap: "wrap" }}>
+                  {cacheStatus?.lastRefreshSuccess === false && (
+                    <span style={{ fontSize: 12, color: "#f87171", background: "#7f1d1d33", border: "1px solid #7f1d1d", borderRadius: 6, padding: "3px 8px" }}>
+                      ⚠ Last refresh failed — showing previous data
+                    </span>
+                  )}
+                  {cacheStatus?.fetchedAt && (
+                    <span style={{ fontSize: 12, color: "#888" }}>
+                      Updated {timeAgo(cacheStatus.fetchedAt)} · {cacheStatus.reviewCount} reviews cached
+                    </span>
+                  )}
+                  <button
+                    onClick={runRefresh}
+                    disabled={refreshing}
+                    style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid #444", background: refreshing ? "#222" : "#2a2a2a", color: refreshing ? "#555" : "#aaa", fontSize: 12, fontWeight: 600, cursor: refreshing ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 6 }}
+                  >
+                    {refreshing ? (
+                      <>
+                        <span style={{ display: "inline-block", width: 10, height: 10, border: "2px solid #555", borderTopColor: "#aaa", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
+                        Refreshing...
+                      </>
+                    ) : "↻ Refresh Reviews"}
+                  </button>
+                </div>
+              )}
+            </div>
+
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
               <div>
                 <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Manage Reviews</h2>
@@ -194,7 +321,11 @@ export default function App() {
             {reviews.length === 0 ? (
               <div style={{ textAlign: "center", padding: "60px 0", color: "#555" }}>
                 <div style={{ fontSize: 32, marginBottom: 12 }}>📭</div>
-                <div>No reviews loaded. Check your Google Places API key and Place ID.</div>
+                <div>
+                  {config.reviewSource === "outscraper"
+                    ? "No cached reviews yet. Click \"↻ Refresh Reviews\" to fetch from Outscraper."
+                    : "No reviews loaded. Check your Google Places API key and Place ID."}
+                </div>
               </div>
             ) : (
               <div style={{ display: "grid", gap: 12 }}>
@@ -257,7 +388,7 @@ export default function App() {
                 </>}
               </Section>
 
-              <button onClick={saveConfig} disabled={saving} style={{ width: "100%", padding: "10px", borderRadius: 8, border: "none", background: saving ? "#333" : config.accentColor, color: "#fff", fontWeight: 700, fontSize: 14, cursor: saving ? "not-allowed" : "pointer", marginTop: 4 }}>
+              <button onClick={() => saveConfig()} disabled={saving} style={{ width: "100%", padding: "10px", borderRadius: 8, border: "none", background: saving ? "#333" : config.accentColor, color: "#fff", fontWeight: 700, fontSize: 14, cursor: saving ? "not-allowed" : "pointer", marginTop: 4 }}>
                 {saving ? "Saving..." : "💾 Save Settings"}
               </button>
             </div>
@@ -279,6 +410,78 @@ export default function App() {
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* SETTINGS TAB */}
+        {tab === "Settings" && (
+          <div style={{ maxWidth: 560 }}>
+            <h2 style={{ margin: "0 0 8px", fontSize: 20, fontWeight: 700 }}>Settings</h2>
+            <p style={{ color: "#888", fontSize: 13, marginBottom: 24 }}>Configure your review data source and automation preferences.</p>
+
+            <div style={{ background: "#1a1a1a", borderRadius: 12, padding: 20, border: "1px solid #2a2a2a", marginBottom: 16 }}>
+              <Section label="Review Source">
+                <div style={{ fontSize: 13, color: "#ccc", marginBottom: 8 }}>
+                  Google Places returns up to 5 recent reviews. Outscraper fetches all reviews (requires <code style={{ background: "#2a2a2a", padding: "1px 5px", borderRadius: 3 }}>OUTSCRAPER_API_KEY</code> on the server).
+                </div>
+                <Row label="Source">
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {[["google", "Google Places"], ["outscraper", "Outscraper"]].map(([val, label]) => {
+                      const disabled = val === "outscraper" && !capabilities.outscraperAvailable;
+                      return (
+                        <button
+                          key={val}
+                          onClick={() => !disabled && handleSourceToggle(val)}
+                          title={disabled ? "Set OUTSCRAPER_API_KEY on the server to enable." : undefined}
+                          style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${config.reviewSource === val ? config.accentColor : "#444"}`, background: config.reviewSource === val ? config.accentColor + "22" : "transparent", color: disabled ? "#555" : config.reviewSource === val ? config.accentColor : "#aaa", fontSize: 12, fontWeight: 600, cursor: disabled ? "not-allowed" : "pointer" }}
+                        >
+                          {label}{disabled ? " (unavailable)" : ""}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Row>
+                {!capabilities.outscraperAvailable && (
+                  <div style={{ fontSize: 12, color: "#f59e0b", background: "#78350f33", border: "1px solid #78350f", borderRadius: 6, padding: "8px 10px", marginTop: 8 }}>
+                    ⚠ Outscraper is not configured on this server. Add <code style={{ background: "#2a2a2a", padding: "1px 4px", borderRadius: 3 }}>OUTSCRAPER_API_KEY</code> to your Railway environment variables to enable it.
+                  </div>
+                )}
+              </Section>
+            </div>
+
+            {config.reviewSource === "outscraper" && (
+              <div style={{ background: "#1a1a1a", borderRadius: 12, padding: 20, border: "1px solid #2a2a2a", marginBottom: 16 }}>
+                <Section label="Outscraper Refresh">
+                  <Row label="Refresh schedule">
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {[["manual", "Manual only"], ["weekly", "Weekly (Sun 2am)"]].map(([val, label]) => (
+                        <button
+                          key={val}
+                          onClick={() => cfg("refreshSchedule", val)}
+                          style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${config.refreshSchedule === val ? config.accentColor : "#444"}`, background: config.refreshSchedule === val ? config.accentColor + "22" : "transparent", color: config.refreshSchedule === val ? config.accentColor : "#aaa", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </Row>
+                  <ToggleRow
+                    label="Auto-run AI Pick after each refresh"
+                    value={config.autoAiPick}
+                    onChange={v => cfg("autoAiPick", v)}
+                  />
+                  {config.autoAiPick && (
+                    <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>
+                      After each refresh, Claude will automatically select the best reviews. Previous picks will be replaced.
+                    </div>
+                  )}
+                </Section>
+              </div>
+            )}
+
+            <button onClick={() => saveConfig()} disabled={saving} style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: saving ? "#333" : config.accentColor, color: "#fff", fontWeight: 700, fontSize: 14, cursor: saving ? "not-allowed" : "pointer" }}>
+              {saving ? "Saving..." : "💾 Save Settings"}
+            </button>
           </div>
         )}
 
@@ -313,6 +516,14 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {/* Footer */}
+      <div style={{ borderTop: "1px solid #1a1a1a", padding: "16px 24px", textAlign: "center", fontSize: 11, color: "#444" }}>
+        Reviews Widget — Open Source, MIT License ·{" "}
+        <a href="https://github.com/your-org/reviews-widget" target="_blank" rel="noreferrer" style={{ color: "#555", textDecoration: "none" }}>GitHub</a>
+      </div>
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
@@ -381,8 +592,8 @@ function WidgetPreview({ reviews, config, meta, mobile }) {
 }
 
 // ─── Form Controls ────────────────────────────────────────────────────────────
-const Section  = ({ label, children }) => <div style={{ marginBottom: 20 }}><div style={{ fontSize: 11, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>{label}</div><div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{children}</div></div>;
-const Row      = ({ label, children }) => <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}><span style={{ color: "#ccc" }}>{label}</span>{children}</div>;
+const Section   = ({ label, children }) => <div style={{ marginBottom: 20 }}><div style={{ fontSize: 11, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>{label}</div><div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{children}</div></div>;
+const Row       = ({ label, children }) => <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}><span style={{ color: "#ccc" }}>{label}</span>{children}</div>;
 const ToggleRow = ({ label, value, onChange }) => <Row label={label}><div onClick={() => onChange(!value)} style={{ width: 36, height: 20, borderRadius: 10, background: value ? "#4f46e5" : "#444", cursor: "pointer", position: "relative", transition: "background 0.2s" }}><div style={{ width: 16, height: 16, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: value ? 18 : 2, transition: "left 0.2s" }} /></div></Row>;
 const ColorRow  = ({ label, value, onChange }) => <Row label={label}><input type="color" value={value} onChange={e => onChange(e.target.value)} style={{ width: 32, height: 26, borderRadius: 4, border: "none", cursor: "pointer", background: "none" }} /></Row>;
 const RangeRow  = ({ label, value, min, max, onChange }) => <div style={{ fontSize: 13 }}><div style={{ color: "#ccc", marginBottom: 4 }}>{label}</div><input type="range" min={min} max={max} value={value} onChange={e => onChange(e.target.value)} style={{ width: "100%", accentColor: "#4f46e5" }} /></div>;

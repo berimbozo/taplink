@@ -25,26 +25,7 @@ const PORT = process.env.PORT || 3000;
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
 app.use(cors({
-  origin: (origin, callback) => {
-    const allowed = [
-      process.env.ADMIN_PORTAL_URL,
-      /\.gymdesk\.com$/,
-    ].filter(Boolean);
-
-    // Allow requests with no origin (e.g. curl, widget.js script tag)
-    if (!origin) return callback(null, true);
-
-    const isAllowed = allowed.some(a =>
-      a instanceof RegExp ? a.test(origin) : a === origin
-    );
-
-    if (isAllowed) {
-      callback(null, true);
-    } else {
-      console.warn(`CORS blocked origin: ${origin}`);
-      callback(null, false);
-    }
-  },
+  origin: "*",
   methods: ["GET", "POST"],
   allowedHeaders: ["Content-Type", "x-admin-key"],
 }));

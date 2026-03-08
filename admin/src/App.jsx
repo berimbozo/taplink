@@ -115,8 +115,13 @@ export default function App() {
       const revData = await api.get("/api/reviews");
       setReviews(revData.reviews || []);
       showToast("AI picks updated!");
-    } catch {
-      showToast("AI pick failed. Check your Anthropic API key.", "error");
+    } catch (err) {
+      const msg = err.message || "";
+      if (msg.toLowerCase().includes("credit")) {
+        showToast("AI pick failed: insufficient Anthropic credits. Add credits at console.anthropic.com.", "error");
+      } else {
+        showToast("AI pick failed. Check your Anthropic API key.", "error");
+      }
     } finally {
       setAiLoading(false);
     }

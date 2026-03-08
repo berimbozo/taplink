@@ -25,7 +25,10 @@ const PORT = process.env.PORT || 3000;
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
 app.use(cors({
-  origin: "*",
+  origin: [
+    process.env.ADMIN_PORTAL_URL,  // your Railway admin portal URL
+    /\.gymdesk\.com$/,             // allow all gymdesk subdomains
+  ],
   methods: ["GET", "POST"],
   allowedHeaders: ["Content-Type", "x-admin-key"],
 }));

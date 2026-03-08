@@ -19,6 +19,11 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+if (!process.env.DATABASE_URL) {
+  console.error("ERROR: DATABASE_URL is not set. See README for Railway setup instructions.");
+  process.exit(1);
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 

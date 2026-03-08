@@ -83,8 +83,14 @@ The project has three parts:
 2. Go to [railway.app](https://railway.app) → **New Project → Deploy from GitHub repo**
 3. Select your forked repo
 4. In your Railway project, click **+ New** → **Database** → **Add PostgreSQL**
-5. Railway will automatically set the `DATABASE_URL` environment variable
-6. Go to your backend service → **Variables** and add the following:
+5. Go to your **backend service → Variables** and manually add `DATABASE_URL` using the internal URL from your Postgres service:
+   - Click your **Postgres service** → **Variables** → copy the value of `DATABASE_URL`
+   - Go back to your **backend service** → **Variables** → add `DATABASE_URL` with that value
+   - Railway's auto-injection can silently fail — manually setting it ensures it works
+
+   > ⚠️ If the app starts but immediately exits with `ECONNREFUSED ::1:5432`, `DATABASE_URL` is not reaching the app. Follow the step above to set it manually.
+
+6. While in your backend service Variables, also add the following:
 
 | Variable | Value |
 |---|---|
@@ -171,7 +177,7 @@ bjj-reviews-widget/
 | `ADMIN_API_KEY` | Backend + Portal | Shared secret to protect admin routes |
 | `API_BASE_URL` | Backend | Your Railway backend public URL |
 | `ADMIN_PORTAL_URL` | Backend | Your portal URL (for CORS) |
-| `DATABASE_URL` | Backend | Auto-set by Railway Postgres plugin |
+| `DATABASE_URL` | Backend | Set manually — copy from Railway Postgres service Variables (auto-injection can silently fail) |
 | `VITE_API_BASE_URL` | Portal | Points to your backend |
 | `VITE_ADMIN_API_KEY` | Portal | Same as backend `ADMIN_API_KEY` |
 

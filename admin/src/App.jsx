@@ -7,12 +7,20 @@ const API_BASE = import.meta.env?.VITE_API_BASE_URL ?? "https://your-app.up.rail
 const ADMIN_KEY = import.meta.env?.VITE_ADMIN_API_KEY ?? "";
 
 const api = {
-  get:  (path)       => fetch(`${API_BASE}${path}`).then(r => r.json()),
+  get:  (path)       => fetch(`${API_BASE}${path}`).then(async r => {
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
+    return data;
+  }),
   post: (path, body) => fetch(`${API_BASE}${path}`, {
     method:  "POST",
     headers: { "Content-Type": "application/json", "x-admin-key": ADMIN_KEY },
     body:    JSON.stringify(body),
-  }).then(r => r.json()),
+  }).then(async r => {
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
+    return data;
+  }),
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

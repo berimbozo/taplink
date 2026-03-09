@@ -145,9 +145,14 @@ npm run dev
 <script src="https://your-app.up.railway.app/widget.js"></script>
 ```
 
-3. In **GymDesk**: go to your website editor → find the page you want reviews on → add a **Custom HTML** block → paste the snippet → save and publish
+3. In **GymDesk**, the two parts of the snippet go in different places:
+   - **`<script src="…/widget.js">`** → **Website → Settings → Body Tags** — paste it here once. It loads the widget script for your whole site.
+   - **`<div id="reviews-widget"></div>`** → open the specific page in the editor → add a **Custom HTML** block → paste just this div wherever you want the reviews to appear.
+4. Save and publish.
 
 > The widget will automatically use whatever settings you've saved in the admin portal. No need to re-embed when you change the appearance.
+
+> **GymDesk tip — Section Heading:** The admin portal has a built-in "Section Title" toggle (e.g. "What Our Members Say"), but on GymDesk the widget's heading won't match your site's native font and style. The better approach is to **leave the portal's section title off** and instead add an `<h1>` or heading block directly above the Custom HTML block in GymDesk's page editor. That way the heading inherits your site's typography automatically.
 
 ---
 

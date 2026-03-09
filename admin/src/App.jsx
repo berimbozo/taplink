@@ -66,6 +66,8 @@ const defaultConfig = {
   showSectionTitle: true,
   sectionTitle:     "What Our Members Say About Us",
   reviewMaxChars:   250,
+  showReviewsLink:  false,
+  reviewsUrl:       "",
 };
 
 const TABS = ["Reviews", "Appearance", "Settings", "Embed"];
@@ -397,6 +399,11 @@ export default function App() {
                 </>}
               </Section>
 
+              <Section label="Reviews Link">
+                <ToggleRow label='Show "Read more reviews" link' value={config.showReviewsLink} onChange={v => cfg("showReviewsLink", v)} />
+                {config.showReviewsLink && <InputRow label="Google Reviews URL" value={config.reviewsUrl} onChange={v => cfg("reviewsUrl", v)} />}
+              </Section>
+
               <button onClick={() => saveConfig()} disabled={saving} style={{ width: "100%", padding: "10px", borderRadius: 8, border: "none", background: saving ? "#333" : config.accentColor, color: "#fff", fontWeight: 700, fontSize: 14, cursor: saving ? "not-allowed" : "pointer", marginTop: 4 }}>
                 {saving ? "Saving..." : "💾 Save Settings"}
               </button>
@@ -498,7 +505,7 @@ export default function App() {
         {tab === "Embed" && (
           <div style={{ maxWidth: 700 }}>
             <h2 style={{ margin: "0 0 8px", fontSize: 20 }}>Embed Your Widget</h2>
-            <p style={{ color: "#888", fontSize: 13, marginBottom: 24 }}>Paste this snippet into your GymDesk site's custom HTML section. The widget auto-updates whenever you change settings here.</p>
+            <p style={{ color: "#888", fontSize: 13, marginBottom: 24 }}>The widget auto-updates whenever you change settings here — no need to re-embed.</p>
 
             <div style={{ background: "#1a1a1a", borderRadius: 12, padding: 20, border: "1px solid #2a2a2a", marginBottom: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -512,8 +519,8 @@ export default function App() {
               <h4 style={{ margin: "0 0 12px", fontSize: 14 }}>📋 GymDesk Setup</h4>
               {[
                 ["Log into GymDesk", "Go to your website editor"],
-                ["Find 'Custom Code' or 'Embed HTML'", "Usually under Website → Pages → Edit"],
-                ["Paste the snippet above", "Place it wherever you want reviews to appear"],
+                ['Add the <script> tag to Body Tags', 'Website → Settings → Body Tags — paste the <script src="…/widget.js"> line here'],
+                ["Add the <div> to your page", "Open the page → add a Custom HTML block → paste just the <div id=\"reviews-widget\"></div> line where you want the widget to appear"],
                 ["Save and publish", "The widget will load automatically"],
               ].map(([title, desc], i) => (
                 <div key={i} style={{ display: "flex", gap: 12, marginBottom: 12 }}>
@@ -615,6 +622,11 @@ function WidgetPreview({ reviews, config, meta, mobile }) {
       {config.ctaEnabled && (
         <div style={{ textAlign: "center", marginTop: 18 }}>
           <a href={config.ctaLink} style={{ display: "inline-block", padding: "11px 28px", borderRadius: 8, background: config.ctaColor, color: "#fff", fontWeight: 700, fontSize: 14, textDecoration: "none" }}>{config.ctaText}</a>
+        </div>
+      )}
+      {config.showReviewsLink && config.reviewsUrl && (
+        <div style={{ textAlign: "center", marginTop: 12 }}>
+          <a href={config.reviewsUrl} style={{ fontSize: 13, color: config.accentColor, textDecoration: "none", fontWeight: 600 }}>Read more reviews ›</a>
         </div>
       )}
     </div>

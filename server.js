@@ -679,6 +679,15 @@ app.get("/widget.js", async (_req, res) => {
       cta.innerHTML = '<a href="'+cfg.ctaLink+'" style="display:inline-block;padding:11px 28px;border-radius:8px;background:'+cfg.ctaColor+';color:#fff;font-weight:700;font-size:14px;text-decoration:none">'+cfg.ctaText+'</a>';
       el.appendChild(cta);
     }
+
+    // Read more reviews link
+    if (cfg.showReviewsLink && cfg.reviewsUrl) {
+      const more = document.createElement("div");
+      more.style.textAlign = "center";
+      more.style.marginTop = "12px";
+      more.innerHTML = '<a href="'+cfg.reviewsUrl+'" target="_blank" rel="noopener noreferrer" style="font-size:13px;color:'+cfg.accentColor+';text-decoration:none;font-weight:600">Read more reviews &#8250;</a>';
+      el.appendChild(more);
+    }
   }
 
   if (document.readyState === "loading") {
@@ -750,6 +759,8 @@ function defaultConfig() {
     showSectionTitle: true,
     sectionTitle:     "What Our Members Say About Us",
     reviewMaxChars:   250,
+    showReviewsLink:  false,
+    reviewsUrl:       "",
   };
 }
 

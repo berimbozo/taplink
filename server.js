@@ -3,6 +3,7 @@
  * Runs on Railway as a Node.js/Express server.
  *
  * Routes:
+ *   POST /api/auth                 — validate admin key (no side effects)
  *   GET  /api/system/capabilities  — report which optional features are available
  *   GET  /api/reviews              — fetch reviews (Google Places live OR Outscraper cache)
  *   GET  /api/reviews/cache-status — last refresh timestamp, source, and failure info
@@ -337,6 +338,14 @@ Respond ONLY with a valid JSON object — no markdown, no preamble:
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/auth
+ * Validates the admin key without performing any side effects.
+ */
+app.post("/api/auth", requireAdminKey, (_req, res) => {
+  res.json({ ok: true });
+});
 
 /**
  * GET /api/system/capabilities

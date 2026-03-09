@@ -757,7 +757,7 @@ function WidgetPreview({ reviews, config, meta, mobile }: { reviews: Review[]; c
           </div>
         </div>
       )}
-      {style === "row"  && <div style={{ display: "flex", flexDirection: "row", gap: 16, overflowX: "auto", paddingBottom: 8, alignItems: "stretch", justifyContent: "center" }}>{reviews.map(r => <ReviewCard key={r.id} r={r} extraStyle={{ flex: "0 0 240px" }} />)}</div>}
+      {style === "row"  && <div style={{ overflowX: "auto" }}><div style={{ display: "flex", flexDirection: "row", gap: 16, paddingBottom: 8, alignItems: "stretch", width: "max-content", margin: "0 auto" }}>{reviews.map(r => <ReviewCard key={r.id} r={r} extraStyle={{ flex: "0 0 240px" }} />)}</div></div>}
       {style === "grid" && <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12 }}>{reviews.slice(0,4).map(r => <ReviewCard key={r.id} r={r} />)}</div>}
       {style === "list" && <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{reviews.map(r => <ReviewCard key={r.id} r={r} />)}</div>}
 

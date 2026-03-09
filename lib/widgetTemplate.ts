@@ -158,7 +158,7 @@ export function buildWidgetScript(apiBase: string): string {
       if (style === "grid") {
         containerStyle = "display:grid;grid-template-columns:repeat(2,1fr);gap:12px";
       } else if (style === "row") {
-        containerStyle = "display:flex;flex-direction:row;gap:16px;overflow-x:auto;padding-bottom:8px;align-items:stretch;justify-content:center;";
+        containerStyle = "display:flex;flex-direction:row;gap:16px;padding-bottom:8px;align-items:stretch;width:max-content;margin:0 auto;";
         cardExtra = "flex:0 0 260px;display:flex;flex-direction:column;";
       } else {
         containerStyle = "display:flex;flex-direction:column;gap:10px";
@@ -173,7 +173,14 @@ export function buildWidgetScript(apiBase: string): string {
         wireReadMore(cc);
       }
       refreshCards();
-      wrap.appendChild(cc);
+      if (style === "row") {
+        const scroller = document.createElement("div");
+        scroller.style.cssText = "overflow-x:auto;";
+        scroller.appendChild(cc);
+        wrap.appendChild(scroller);
+      } else {
+        wrap.appendChild(cc);
+      }
       el.appendChild(wrap);
 
       // Show more button

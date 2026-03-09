@@ -345,7 +345,7 @@ app.get("/api/system/capabilities", (_req, res) => {
  * If source is 'outscraper': serve from cache merged with pinned state.
  * If source is 'google': fetch live from Google Places.
  */
-app.get("/api/reviews", async (req, res) => {
+app.get("/api/reviews", async (_req, res) => {
   try {
     const { rows: cfgRows } = await db.query(
       "SELECT value FROM widget_config WHERE key = 'main'"
@@ -515,7 +515,7 @@ app.post("/api/ai-pick", requireAdminKey, async (req, res) => {
  * GET /widget.js
  * Serves the embeddable widget script.
  */
-app.get("/widget.js", async (req, res) => {
+app.get("/widget.js", async (_req, res) => {
   res.setHeader("Content-Type", "application/javascript");
   res.setHeader("Cache-Control", "public, max-age=300");
 
@@ -524,10 +524,14 @@ app.get("/widget.js", async (req, res) => {
   res.send(`
 (function() {
   const API = "${apiBase}";
-  const el  = document.getElementById("reviews-widget");
-  if (!el) return;
 
-  async function load() {
+  function init() {
+    const el = document.getElementById("reviews-widget");
+    if (!el) return;
+    load(el);
+  }
+
+  async function load(el) {
     try {
       const [cfgRes, revRes] = await Promise.all([
         fetch(API + "/api/config"),
@@ -633,7 +637,11 @@ app.get("/widget.js", async (req, res) => {
     }
   }
 
-  load();
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
 })();
   `.trim());
 });

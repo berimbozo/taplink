@@ -3,7 +3,7 @@
  * Runs on Railway as a Node.js/Express server.
  *
  * Routes:
- *   POST /api/auth                 — validate admin key (no side effects)
+ *   POST /api/login                — validate admin password, return session token
  *   GET  /api/system/capabilities  — report which optional features are available
  *   GET  /api/reviews              — fetch reviews (Google Places live OR Outscraper cache)
  *   GET  /api/reviews/cache-status — last refresh timestamp, source, and failure info
@@ -20,6 +20,7 @@
 
 import express from "express";
 import cors from "cors";
+import rateLimit from "express-rate-limit";
 import pg from "pg";
 import fetch from "node-fetch";
 import Anthropic from "@anthropic-ai/sdk";
@@ -63,12 +64,32 @@ const requireAdminKey = (req, res, next) => {
 
 // ─── Database Setup ───────────────────────────────────────────────────────────
 
-// Bail early with a clear message if DATABASE_URL is missing or still a placeholder
+// ─── Env Var Validation ───────────────────────────────────────────────────────
+
 const dbUrl = process.env.DATABASE_URL;
 if (!dbUrl || dbUrl.includes("user:password@host")) {
   console.error("❌ DATABASE_URL is missing or still set to the placeholder value.");
   console.error("   Set the real DATABASE_URL in your Railway environment variables.");
   process.exit(1);
+}
+if (!process.env.ADMIN_API_KEY) {
+  console.error("❌ ADMIN_API_KEY is not set. Set it in your environment variables.");
+  process.exit(1);
+}
+if (!process.env.ADMIN_PASSWORD) {
+  console.warn("⚠️  ADMIN_PASSWORD is not set — admin portal login will be disabled.");
+}
+if (!process.env.API_BASE_URL) {
+  console.warn("⚠️  API_BASE_URL is not set — widget.js will use a placeholder URL.");
+}
+if (!process.env.GOOGLE_PLACES_API_KEY || !process.env.GOOGLE_PLACE_ID) {
+  console.warn("⚠️  GOOGLE_PLACES_API_KEY or GOOGLE_PLACE_ID not set — Google Places source will be unavailable.");
+}
+if (!process.env.ANTHROPIC_API_KEY) {
+  console.warn("⚠️  ANTHROPIC_API_KEY not set — AI pick feature will be unavailable.");
+}
+if (!process.env.ADMIN_PORTAL_URL) {
+  console.warn("⚠️  ADMIN_PORTAL_URL not set — admin portal CORS will not be configured.");
 }
 
 const db = new pg.Pool({
@@ -337,14 +358,29 @@ Respond ONLY with a valid JSON object — no markdown, no preamble:
   return parsed;
 }
 
+// ─── Rate Limiters ────────────────────────────────────────────────────────────
+
+const loginLimiter   = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: "Too many login attempts — try again in 15 minutes." } });
+const refreshLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 5,  message: { error: "Too many refresh requests — try again in an hour." } });
+const aiPickLimiter  = rateLimit({ windowMs: 60 * 60 * 1000, max: 20, message: { error: "Too many AI pick requests — try again in an hour." } });
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 /**
- * POST /api/auth
- * Validates the admin key without performing any side effects.
+ * POST /api/login
+ * Validates the admin password (set via ADMIN_PASSWORD env var on the backend).
+ * Returns the API token on success — never exposes the raw API key in env vars.
  */
-app.post("/api/auth", requireAdminKey, (_req, res) => {
-  res.json({ ok: true });
+app.post("/api/login", loginLimiter, (req, res) => {
+  const { password } = req.body || {};
+  if (!process.env.ADMIN_PASSWORD) {
+    return res.status(503).json({ error: "ADMIN_PASSWORD is not configured on the server." });
+  }
+  if (!password || password !== process.env.ADMIN_PASSWORD) {
+    return res.status(401).json({ error: "Incorrect password." });
+  }
+  // Return the API key as the session token — client stores it in sessionStorage
+  res.json({ token: process.env.ADMIN_API_KEY });
 });
 
 /**
@@ -430,7 +466,7 @@ app.get("/api/reviews/cache-status", async (_req, res) => {
  * POST /api/reviews/refresh
  * Manually triggers an Outscraper fetch and updates the cache.
  */
-app.post("/api/reviews/refresh", requireAdminKey, async (_req, res) => {
+app.post("/api/reviews/refresh", requireAdminKey, refreshLimiter, async (_req, res) => {
   try {
     const { reviewCount } = await runRefresh();
     res.json({ success: true, reviewCount });
@@ -499,7 +535,7 @@ app.post("/api/config", requireAdminKey, async (req, res) => {
  * If source is 'outscraper', uses all cached reviews.
  * If source is 'google', uses the reviews array from the request body.
  */
-app.post("/api/ai-pick", requireAdminKey, async (req, res) => {
+app.post("/api/ai-pick", requireAdminKey, aiPickLimiter, async (req, res) => {
   try {
     const { rows: cfgRows } = await db.query(
       "SELECT value FROM widget_config WHERE key = 'main'"
@@ -662,7 +698,10 @@ app.get("/widget.js", async (_req, res) => {
       document.getElementById(carouselId+"-prev")?.addEventListener("click", () => showCard(idx-1));
       document.getElementById(carouselId+"-next")?.addEventListener("click", () => showCard(idx+1));
       carouselDisplay.forEach((_,i) => document.getElementById(carouselId+"-dot-"+i)?.addEventListener("click", () => showCard(i)));
-      setInterval(() => showCard(idx+1), 5000);
+      const intervalId = setInterval(() => {
+        if (!document.getElementById(carouselId)) { clearInterval(intervalId); return; }
+        showCard(idx+1);
+      }, 5000);
 
     } else {
       // Grid, row, list — all support "Show more" pagination

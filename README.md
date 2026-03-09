@@ -117,9 +117,8 @@ The admin portal is a React app. You can deploy it as a second Railway service o
 1. In your Railway project → **+ New → GitHub Repo** → select the same repo, but set the **Root Directory** to `/admin`
 2. Set build command: `npm run build`
 3. Set start command: `npx serve dist`
-4. Add environment variables:
+4. Add one environment variable:
    - `VITE_API_BASE_URL` = your backend Railway URL
-   - `VITE_ADMIN_API_KEY` = the same `ADMIN_API_KEY` you set on the backend
 
 **Option B: Run locally (simpler for personal use)**
 
@@ -183,9 +182,8 @@ bjj-reviews-widget/
 | `API_BASE_URL` | Backend | Your Railway backend public URL |
 | `ADMIN_PORTAL_URL` | Backend | Your portal URL (for CORS) |
 | `DATABASE_URL` | Backend | Set manually — copy from Railway Postgres service Variables (auto-injection can silently fail) |
+| `ADMIN_PASSWORD` | Backend | The password for the admin portal login screen — checked server-side only |
 | `VITE_API_BASE_URL` | Portal | Points to your backend |
-| `VITE_ADMIN_API_KEY` | Portal | Same as backend `ADMIN_API_KEY` — used silently for API auth |
-| `VITE_ADMIN_PASSWORD` | Portal | The password shown on the portal login screen (you choose this) |
 
 ---
 

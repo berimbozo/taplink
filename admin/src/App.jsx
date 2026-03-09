@@ -1,42 +1,57 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const API_BASE     = import.meta.env?.VITE_API_BASE_URL   ?? "https://your-app.up.railway.app";
-const ADMIN_KEY    = import.meta.env?.VITE_ADMIN_API_KEY  ?? "";
-const ADMIN_PASS   = import.meta.env?.VITE_ADMIN_PASSWORD ?? "";
-const SESSION_FLAG = "rw_logged_in";
+const API_BASE   = import.meta.env?.VITE_API_BASE_URL ?? "https://your-app.up.railway.app";
+const SESSION_KEY = "rw_admin_token";
 
-const api = {
-  get:  (path)       => fetch(`${API_BASE}${path}`).then(async r => {
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
-    return data;
-  }),
-  post: (path, body) => fetch(`${API_BASE}${path}`, {
-    method:  "POST",
-    headers: { "Content-Type": "application/json", "x-admin-key": ADMIN_KEY },
-    body:    JSON.stringify(body),
-  }).then(async r => {
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
-    return data;
-  }),
-};
+function makeApi(token) {
+  return {
+    get:  (path)       => fetch(`${API_BASE}${path}`).then(async r => {
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
+      return data;
+    }),
+    post: (path, body) => fetch(`${API_BASE}${path}`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json", "x-admin-key": token },
+      body:    JSON.stringify(body),
+    }).then(async r => {
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
+      return data;
+    }),
+  };
+}
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
 function LoginScreen({ onLogin }) {
   const [password, setPassword] = useState("");
   const [error, setError]       = useState(null);
+  const [checking, setChecking] = useState(false);
 
-  const attempt = (e) => {
+  const attempt = async (e) => {
     e.preventDefault();
     if (!password) return;
-    if (ADMIN_PASS && password !== ADMIN_PASS) {
-      setError("Incorrect password.");
-      return;
+    setChecking(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Incorrect password.");
+        return;
+      }
+      sessionStorage.setItem(SESSION_KEY, data.token);
+      onLogin(data.token);
+    } catch {
+      setError("Could not reach the server. Check your connection.");
+    } finally {
+      setChecking(false);
     }
-    sessionStorage.setItem(SESSION_FLAG, "1");
-    onLogin();
   };
 
   return (
@@ -57,8 +72,8 @@ function LoginScreen({ onLogin }) {
             style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #2a2a2a", background: "#1a1a1a", color: "#fff", fontSize: 14, outline: "none" }}
           />
           {error && <div style={{ fontSize: 12, color: "#f87171", textAlign: "center" }}>{error}</div>}
-          <button type="submit" disabled={!password} style={{ padding: "11px", borderRadius: 8, border: "none", background: "#C41E3A", color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
-            Login
+          <button type="submit" disabled={!password || checking} style={{ padding: "11px", borderRadius: 8, border: "none", background: "#C41E3A", color: "#fff", fontWeight: 700, fontSize: 14, cursor: checking ? "not-allowed" : "pointer", opacity: checking ? 0.7 : 1 }}>
+            {checking ? "Checking…" : "Login"}
           </button>
         </form>
       </div>
@@ -118,16 +133,17 @@ const TABS = ["Reviews", "Appearance", "Settings", "Embed"];
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [loggedIn, setLoggedIn] = useState(() => !!sessionStorage.getItem(SESSION_FLAG));
+  const [token, setToken] = useState(() => sessionStorage.getItem(SESSION_KEY) || "");
 
-  if (!loggedIn) {
-    return <LoginScreen onLogin={() => setLoggedIn(true)} />;
+  if (!token) {
+    return <LoginScreen onLogin={(t) => setToken(t)} />;
   }
 
-  return <AdminPortal onLogout={() => { sessionStorage.removeItem(SESSION_FLAG); setLoggedIn(false); }} />;
+  return <AdminPortal adminKey={token} onLogout={() => { sessionStorage.removeItem(SESSION_KEY); setToken(""); }} />;
 }
 
-function AdminPortal({ onLogout }) {
+function AdminPortal({ adminKey, onLogout }) {
+  const api = makeApi(adminKey);
   const [tab, setTab]                   = useState("Reviews");
   const [reviews, setReviews]           = useState([]);
   const [meta, setMeta]                 = useState({ overallRating: null, totalReviews: null });

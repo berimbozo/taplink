@@ -95,10 +95,15 @@ export function buildWidgetScript(apiBase: string): string {
     const style    = isMobile && cfg.displayStyle !== "row" ? "carousel" : cfg.displayStyle;
     const pageSize = cfg.maxReviews || 6;
 
-    // Filter reviews: prefer pinned + aiPicked, fall back to all above minRating
-    // Don't slice here — pageSize controls the initial visible count
+    // Filter reviews: prefer pinned + aiPicked, pad with other qualifying reviews up to maxReviews
     let display = reviews.filter(r => r.pinned || r.aiPicked);
-    if (display.length === 0) display = reviews.filter(r => r.rating >= (cfg.minRating || 4));
+    if (display.length === 0) {
+      display = reviews.filter(r => r.rating >= (cfg.minRating || 4));
+    } else if (display.length < pageSize) {
+      const pickedIds = new Set(display.map(r => r.id));
+      const extras = reviews.filter(r => !pickedIds.has(r.id) && r.rating >= (cfg.minRating || 4));
+      display = [...display, ...extras];
+    }
 
     const wrap = document.createElement("div");
     wrap.style.cssText = "font-family:system-ui,sans-serif;background:" + cfg.bgColor + ";color:" + cfg.textColor + ";border-radius:16px;padding:24px;box-sizing:border-box;";
@@ -153,7 +158,7 @@ export function buildWidgetScript(apiBase: string): string {
       if (style === "grid") {
         containerStyle = "display:grid;grid-template-columns:repeat(2,1fr);gap:12px";
       } else if (style === "row") {
-        containerStyle = "display:flex;flex-direction:row;gap:16px;overflow-x:auto;padding-bottom:8px;align-items:stretch;";
+        containerStyle = "display:flex;flex-direction:row;gap:16px;overflow-x:auto;padding-bottom:8px;align-items:stretch;justify-content:center;";
         cardExtra = "flex:0 0 260px;display:flex;flex-direction:column;";
       } else {
         containerStyle = "display:flex;flex-direction:column;gap:10px";

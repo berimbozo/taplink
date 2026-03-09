@@ -343,9 +343,22 @@ function AdminPortal({ adminKey, onLogout }: { adminKey: string; onLogout: () =>
   const cfg = <K extends keyof WidgetConfig>(key: K, val: WidgetConfig[K]) =>
     setConfig(c => ({ ...c, [key]: val }));
 
-  const pinnedCount    = reviews.filter(r => r.pinned).length;
-  const aiCount        = reviews.filter(r => r.aiPicked).length;
-  const visibleReviews = reviews.filter(r => r.rating >= config.minRating).slice(0, config.maxReviews);
+  const pinnedCount = reviews.filter(r => r.pinned).length;
+  const aiCount     = reviews.filter(r => r.aiPicked).length;
+
+  // Match widget display logic: pinned+aiPicked first, padded with other qualifying reviews
+  const _pinnedOrAi = reviews.filter(r => r.pinned || r.aiPicked);
+  const visibleReviews = (() => {
+    if (_pinnedOrAi.length === 0) {
+      return reviews.filter(r => r.rating >= config.minRating).slice(0, config.maxReviews);
+    }
+    if (_pinnedOrAi.length < config.maxReviews) {
+      const pickedIds = new Set(_pinnedOrAi.map(r => r.id));
+      const extras = reviews.filter(r => !pickedIds.has(r.id) && r.rating >= config.minRating);
+      return [..._pinnedOrAi, ...extras].slice(0, config.maxReviews);
+    }
+    return _pinnedOrAi.slice(0, config.maxReviews);
+  })();
 
   if (loading) return (
     <div style={{ background: "#0f0f0f", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#eee", fontFamily: "system-ui" }}>
@@ -744,7 +757,7 @@ function WidgetPreview({ reviews, config, meta, mobile }: { reviews: Review[]; c
           </div>
         </div>
       )}
-      {style === "row"  && <div style={{ display: "flex", flexDirection: "row", gap: 16, overflowX: "auto", paddingBottom: 8, alignItems: "stretch" }}>{reviews.map(r => <ReviewCard key={r.id} r={r} extraStyle={{ flex: "0 0 240px" }} />)}</div>}
+      {style === "row"  && <div style={{ display: "flex", flexDirection: "row", gap: 16, overflowX: "auto", paddingBottom: 8, alignItems: "stretch", justifyContent: "center" }}>{reviews.map(r => <ReviewCard key={r.id} r={r} extraStyle={{ flex: "0 0 240px" }} />)}</div>}
       {style === "grid" && <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12 }}>{reviews.slice(0,4).map(r => <ReviewCard key={r.id} r={r} />)}</div>}
       {style === "list" && <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{reviews.map(r => <ReviewCard key={r.id} r={r} />)}</div>}
 

@@ -32,10 +32,18 @@ const PORT = process.env.PORT || 3000;
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
+// Parse any extra allowed origins from WIDGET_ALLOWED_ORIGINS (comma-separated)
+// e.g. WIDGET_ALLOWED_ORIGINS=https://goldenjj.com,https://www.goldenjj.com
+const extraOrigins = (process.env.WIDGET_ALLOWED_ORIGINS || "")
+  .split(",")
+  .map(o => o.trim())
+  .filter(Boolean);
+
 app.use(cors({
   origin: [
     process.env.ADMIN_PORTAL_URL,  // your Railway admin portal URL
     /\.gymdesk\.com$/,             // allow all gymdesk subdomains
+    ...extraOrigins,               // custom domains set via env var
   ],
   methods: ["GET", "POST"],
   allowedHeaders: ["Content-Type", "x-admin-key"],

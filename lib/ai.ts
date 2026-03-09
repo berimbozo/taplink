@@ -1,11 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { db } from "./db.js";
+import type { Review, AiPickResult } from "./types.js";
 
 /**
  * Runs Claude AI pick on the provided reviews array.
  * Saves ai_picked state to DB and returns { picks, reasoning }.
  */
-export async function runAiPick(reviews) {
+export async function runAiPick(reviews: Review[]): Promise<AiPickResult> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   const prompt = `You are a conversion optimization expert for a martial arts / BJJ gym.
@@ -35,8 +36,8 @@ Respond ONLY with a valid JSON object — no markdown, no preamble:
     messages:   [{ role: "user", content: prompt }],
   });
 
-  const text   = message.content.map(b => b.text || "").join("");
-  const parsed = JSON.parse(text.trim());
+  const text   = message.content.map(b => b.type === "text" ? b.text : "").join("");
+  const parsed = JSON.parse(text.trim()) as AiPickResult;
 
   // Clear existing AI picks then set new ones
   await db.query("UPDATE pinned_reviews SET ai_picked = FALSE");

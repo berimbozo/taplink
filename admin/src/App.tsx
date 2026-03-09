@@ -1,35 +1,96 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type ReactNode, type CSSProperties } from "react";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface Review {
+  id: string;
+  author: string;
+  avatar: string | null;
+  rating: number;
+  date: string;
+  text: string;
+  pinned: boolean;
+  aiPicked: boolean;
+}
+
+interface WidgetConfig {
+  accentColor: string;
+  bgColor: string;
+  textColor: string;
+  showStars: boolean;
+  showPhoto: boolean;
+  showName: boolean;
+  showBadge: boolean;
+  displayStyle: "carousel" | "row" | "grid" | "list";
+  maxReviews: number;
+  minRating: number;
+  ctaEnabled: boolean;
+  ctaText: string;
+  ctaLink: string;
+  ctaColor: string;
+  reviewSource: "google" | "outscraper";
+  refreshSchedule: "manual" | "weekly";
+  autoAiPick: boolean;
+  showSectionTitle: boolean;
+  sectionTitle: string;
+  reviewMaxChars: number;
+  showMoreButton: boolean;
+}
+
+interface Meta {
+  overallRating: number | null;
+  totalReviews: number | null;
+}
+
+interface Toast {
+  msg: string;
+  type: "success" | "error";
+}
+
+interface CacheStatus {
+  outscraperAvailable: boolean;
+  hasCachedData: boolean;
+  fetchedAt: string | null;
+  reviewCount: number;
+  lastRefreshSuccess: boolean | null;
+  lastRefreshError: string | null;
+  lastRefreshAt: string | null;
+}
+
+interface Capabilities {
+  outscraperAvailable: boolean;
+}
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const API_BASE   = import.meta.env?.VITE_API_BASE_URL ?? "https://your-app.up.railway.app";
+const API_BASE   = import.meta.env.VITE_API_BASE_URL ?? "https://your-app.up.railway.app";
 const SESSION_KEY = "rw_admin_token";
 
-function makeApi(token) {
+function makeApi(token: string) {
   return {
-    get:  (path)       => fetch(`${API_BASE}${path}`).then(async r => {
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
+    get:  (path: string) => fetch(`${API_BASE}${path}`).then(async r => {
+      const data = await r.json() as Record<string, unknown>;
+      if (!r.ok) throw new Error((data.error as string) || `Request failed (${r.status})`);
       return data;
     }),
-    post: (path, body) => fetch(`${API_BASE}${path}`, {
+    post: (path: string, body: unknown) => fetch(`${API_BASE}${path}`, {
       method:  "POST",
       headers: { "Content-Type": "application/json", "x-admin-key": token },
       body:    JSON.stringify(body),
     }).then(async r => {
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
+      const data = await r.json() as Record<string, unknown>;
+      if (!r.ok) throw new Error((data.error as string) || `Request failed (${r.status})`);
       return data;
     }),
   };
 }
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
-function LoginScreen({ onLogin }) {
+function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
   const [password, setPassword] = useState("");
-  const [error, setError]       = useState(null);
+  const [error, setError]       = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
 
-  const attempt = async (e) => {
+  const attempt = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!password) return;
     setChecking(true);
@@ -40,13 +101,13 @@ function LoginScreen({ onLogin }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password }),
       });
-      const data = await res.json();
+      const data = await res.json() as { token?: string; error?: string };
       if (!res.ok) {
         setError(data.error || "Incorrect password.");
         return;
       }
-      sessionStorage.setItem(SESSION_KEY, data.token);
-      onLogin(data.token);
+      sessionStorage.setItem(SESSION_KEY, data.token!);
+      onLogin(data.token!);
     } catch {
       setError("Could not reach the server. Check your connection.");
     } finally {
@@ -82,18 +143,18 @@ function LoginScreen({ onLogin }) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-const StarIcon = ({ filled }) => (
+const StarIcon = ({ filled }: { filled: boolean }) => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill={filled ? "#FBBF24" : "none"} stroke="#FBBF24" strokeWidth="2">
     <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
   </svg>
 );
-const Stars = ({ rating }) => (
+const Stars = ({ rating }: { rating: number }) => (
   <div style={{ display: "flex", gap: 2 }}>
     {[1,2,3,4,5].map(i => <StarIcon key={i} filled={i <= rating} />)}
   </div>
 );
 
-function timeAgo(dateStr) {
+function timeAgo(dateStr: string | null): string | null {
   if (!dateStr) return null;
   const diff = Date.now() - new Date(dateStr).getTime();
   const mins  = Math.floor(diff / 60000);
@@ -105,7 +166,7 @@ function timeAgo(dateStr) {
   return `${days}d ago`;
 }
 
-const defaultConfig = {
+const defaultConfig: WidgetConfig = {
   accentColor:     "#C41E3A",
   bgColor:         "#ffffff",
   textColor:       "#1a1a1a",
@@ -129,11 +190,12 @@ const defaultConfig = {
   showMoreButton:   false,
 };
 
-const TABS = ["Reviews", "Appearance", "Settings", "Embed"];
+const TABS = ["Reviews", "Appearance", "Settings", "Embed"] as const;
+type Tab = typeof TABS[number];
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [token, setToken] = useState(() => sessionStorage.getItem(SESSION_KEY) || "");
+  const [token, setToken] = useState<string>(() => sessionStorage.getItem(SESSION_KEY) || "");
 
   if (!token) {
     return <LoginScreen onLogin={(t) => setToken(t)} />;
@@ -142,23 +204,23 @@ export default function App() {
   return <AdminPortal adminKey={token} onLogout={() => { sessionStorage.removeItem(SESSION_KEY); setToken(""); }} />;
 }
 
-function AdminPortal({ adminKey, onLogout }) {
+function AdminPortal({ adminKey, onLogout }: { adminKey: string; onLogout: () => void }) {
   const api = makeApi(adminKey);
-  const [tab, setTab]                   = useState("Reviews");
-  const [reviews, setReviews]           = useState([]);
-  const [meta, setMeta]                 = useState({ overallRating: null, totalReviews: null });
-  const [config, setConfig]             = useState(defaultConfig);
+  const [tab, setTab]                   = useState<Tab>("Reviews");
+  const [reviews, setReviews]           = useState<Review[]>([]);
+  const [meta, setMeta]                 = useState<Meta>({ overallRating: null, totalReviews: null });
+  const [config, setConfig]             = useState<WidgetConfig>(defaultConfig);
   const [loading, setLoading]           = useState(true);
   const [saving, setSaving]             = useState(false);
   const [aiLoading, setAiLoading]       = useState(false);
-  const [aiNote, setAiNote]             = useState(null);
-  const [toast, setToast]               = useState(null);
-  const [previewMode, setPreviewMode]   = useState("desktop");
-  const [cacheStatus, setCacheStatus]   = useState(null);
+  const [aiNote, setAiNote]             = useState<string | null>(null);
+  const [toast, setToast]               = useState<Toast | null>(null);
+  const [previewMode, setPreviewMode]   = useState<"desktop" | "mobile">("desktop");
+  const [cacheStatus, setCacheStatus]   = useState<CacheStatus | null>(null);
   const [refreshing, setRefreshing]     = useState(false);
-  const [capabilities, setCapabilities] = useState({ outscraperAvailable: false });
+  const [capabilities, setCapabilities] = useState<Capabilities>({ outscraperAvailable: false });
 
-  const showToast = (msg, type = "success") => {
+  const showToast = (msg: string, type: Toast["type"] = "success") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 4000);
   };
@@ -166,11 +228,10 @@ function AdminPortal({ adminKey, onLogout }) {
   const loadCacheStatus = useCallback(async () => {
     try {
       const status = await api.get("/api/reviews/cache-status");
-      setCacheStatus(status);
+      setCacheStatus(status as unknown as CacheStatus);
     } catch {}
   }, []);
 
-  // Load reviews + config + capabilities on mount
   useEffect(() => {
     (async () => {
       try {
@@ -179,11 +240,11 @@ function AdminPortal({ adminKey, onLogout }) {
           api.get("/api/config"),
           api.get("/api/system/capabilities"),
         ]);
-        setReviews(revData.reviews || []);
-        setMeta({ overallRating: revData.overallRating, totalReviews: revData.totalReviews });
-        setConfig({ ...defaultConfig, ...cfgData });
-        setCapabilities(caps);
-      } catch (e) {
+        setReviews((revData.reviews as Review[]) || []);
+        setMeta({ overallRating: revData.overallRating as number | null, totalReviews: revData.totalReviews as number | null });
+        setConfig({ ...defaultConfig, ...(cfgData as Partial<WidgetConfig>) });
+        setCapabilities(caps as unknown as Capabilities);
+      } catch {
         showToast("Failed to load data from API. Check API_BASE URL.", "error");
       } finally {
         setLoading(false);
@@ -191,14 +252,13 @@ function AdminPortal({ adminKey, onLogout }) {
     })();
   }, []);
 
-  // Load cache status whenever we know source is outscraper
   useEffect(() => {
     if (config.reviewSource === "outscraper") {
       loadCacheStatus();
     }
   }, [config.reviewSource, loadCacheStatus]);
 
-  const togglePin = async (id, currentPinned) => {
+  const togglePin = async (id: string, currentPinned: boolean) => {
     const newPinned = !currentPinned;
     setReviews(rs => rs.map(r => r.id === id ? { ...r, pinned: newPinned } : r));
     try {
@@ -209,7 +269,7 @@ function AdminPortal({ adminKey, onLogout }) {
     }
   };
 
-  const saveConfig = async (overrides = {}) => {
+  const saveConfig = async (overrides: Partial<WidgetConfig> = {}) => {
     setSaving(true);
     const updated = { ...config, ...overrides };
     try {
@@ -222,7 +282,7 @@ function AdminPortal({ adminKey, onLogout }) {
     }
   };
 
-  const handleSourceToggle = async (newSource) => {
+  const handleSourceToggle = async (newSource: WidgetConfig["reviewSource"]) => {
     if (newSource === "outscraper" && !capabilities.outscraperAvailable) {
       showToast("Outscraper is unavailable — set OUTSCRAPER_API_KEY on the server first.", "error");
       return;
@@ -231,16 +291,14 @@ function AdminPortal({ adminKey, onLogout }) {
     setConfig(c => ({ ...c, reviewSource: newSource }));
     try {
       await api.post("/api/config", { ...config, reviewSource: newSource });
-      // Reload reviews with new source
       const revData = await api.get("/api/reviews");
-      setReviews(revData.reviews || []);
-      setMeta({ overallRating: revData.overallRating, totalReviews: revData.totalReviews });
+      setReviews((revData.reviews as Review[]) || []);
+      setMeta({ overallRating: revData.overallRating as number | null, totalReviews: revData.totalReviews as number | null });
       if (newSource === "outscraper") loadCacheStatus();
       showToast(`Switched to ${newSource === "outscraper" ? "Outscraper" : "Google Places"}.`);
     } catch (err) {
-      // Revert on failure
       setConfig(c => ({ ...c, reviewSource: prev }));
-      showToast(`Switch failed: ${err.message}`, "error");
+      showToast(`Switch failed: ${(err as Error).message}`, "error");
     }
   };
 
@@ -248,13 +306,13 @@ function AdminPortal({ adminKey, onLogout }) {
     setRefreshing(true);
     try {
       const result = await api.post("/api/reviews/refresh", {});
-      showToast(`Refresh complete — ${result.reviewCount} reviews cached.`);
+      showToast(`Refresh complete — ${result.reviewCount as number} reviews cached.`);
       const revData = await api.get("/api/reviews");
-      setReviews(revData.reviews || []);
-      setMeta({ overallRating: revData.overallRating, totalReviews: revData.totalReviews });
+      setReviews((revData.reviews as Review[]) || []);
+      setMeta({ overallRating: revData.overallRating as number | null, totalReviews: revData.totalReviews as number | null });
       await loadCacheStatus();
     } catch (err) {
-      showToast(`Refresh failed: ${err.message}`, "error");
+      showToast(`Refresh failed: ${(err as Error).message}`, "error");
       await loadCacheStatus();
     } finally {
       setRefreshing(false);
@@ -266,12 +324,12 @@ function AdminPortal({ adminKey, onLogout }) {
     setAiNote(null);
     try {
       const res = await api.post("/api/ai-pick", { reviews });
-      setAiNote(res.reasoning);
+      setAiNote(res.reasoning as string);
       const revData = await api.get("/api/reviews");
-      setReviews(revData.reviews || []);
+      setReviews((revData.reviews as Review[]) || []);
       showToast("AI picks updated!");
     } catch (err) {
-      const msg = err.message || "";
+      const msg = (err as Error).message || "";
       if (msg.toLowerCase().includes("credit")) {
         showToast("AI pick failed: insufficient Anthropic credits. Add credits at console.anthropic.com.", "error");
       } else {
@@ -282,7 +340,8 @@ function AdminPortal({ adminKey, onLogout }) {
     }
   };
 
-  const cfg = (key, val) => setConfig(c => ({ ...c, [key]: val }));
+  const cfg = <K extends keyof WidgetConfig>(key: K, val: WidgetConfig[K]) =>
+    setConfig(c => ({ ...c, [key]: val }));
 
   const pinnedCount    = reviews.filter(r => r.pinned).length;
   const aiCount        = reviews.filter(r => r.aiPicked).length;
@@ -333,7 +392,7 @@ function AdminPortal({ adminKey, onLogout }) {
             <div style={{ background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 10, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <span style={{ fontSize: 12, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 1 }}>Data Source</span>
               <div style={{ display: "flex", gap: 6 }}>
-                {[["google", "Google Places"], ["outscraper", "Outscraper"]].map(([val, label]) => {
+                {([["google", "Google Places"], ["outscraper", "Outscraper"]] as [WidgetConfig["reviewSource"], string][]).map(([val, label]) => {
                   const disabled = val === "outscraper" && !capabilities.outscraperAvailable;
                   return (
                     <button
@@ -455,7 +514,7 @@ function AdminPortal({ adminKey, onLogout }) {
               </Section>
 
               <Section label="Layout">
-                <SelectRow label="Style" value={config.displayStyle} onChange={v => cfg("displayStyle", v)} options={[["carousel","Carousel"],["row","Single Row"],["grid","Grid"],["list","List"]]} />
+                <SelectRow label="Style" value={config.displayStyle} onChange={v => cfg("displayStyle", v as WidgetConfig["displayStyle"])} options={[["carousel","Carousel"],["row","Single Row"],["grid","Grid"],["list","List"]]} />
                 <RangeRow label={`Max reviews: ${config.maxReviews}`} value={config.maxReviews} min={1} max={8} onChange={v => cfg("maxReviews", Number(v))} />
                 <RangeRow label={`Min rating: ${config.minRating}★`} value={config.minRating} min={1} max={5} onChange={v => cfg("minRating", Number(v))} />
                 <RangeRow label={`Truncate after: ${config.reviewMaxChars > 0 ? config.reviewMaxChars + " chars" : "off"}`} value={config.reviewMaxChars} min={0} max={600} onChange={v => cfg("reviewMaxChars", Number(v))} />
@@ -483,7 +542,7 @@ function AdminPortal({ adminKey, onLogout }) {
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                 <h3 style={{ margin: 0, fontSize: 15 }}>Live Preview</h3>
                 <div style={{ display: "flex", gap: 6 }}>
-                  {["desktop","mobile"].map(m => (
+                  {(["desktop", "mobile"] as const).map(m => (
                     <button key={m} onClick={() => setPreviewMode(m)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, background: previewMode === m ? config.accentColor : "#2a2a2a", color: previewMode === m ? "#fff" : "#aaa" }}>
                       {m === "desktop" ? "🖥 Desktop" : "📱 Mobile"}
                     </button>
@@ -512,7 +571,7 @@ function AdminPortal({ adminKey, onLogout }) {
                 </div>
                 <Row label="Source">
                   <div style={{ display: "flex", gap: 6 }}>
-                    {[["google", "Google Places"], ["outscraper", "Outscraper"]].map(([val, label]) => {
+                    {([["google", "Google Places"], ["outscraper", "Outscraper"]] as [WidgetConfig["reviewSource"], string][]).map(([val, label]) => {
                       const disabled = val === "outscraper" && !capabilities.outscraperAvailable;
                       return (
                         <button
@@ -540,7 +599,7 @@ function AdminPortal({ adminKey, onLogout }) {
                 <Section label="Outscraper Refresh">
                   <Row label="Refresh schedule">
                     <div style={{ display: "flex", gap: 6 }}>
-                      {[["manual", "Manual only"], ["weekly", "Weekly (Sun 2am)"]].map(([val, label]) => (
+                      {([["manual", "Manual only"], ["weekly", "Weekly (Sun 2am)"]] as [WidgetConfig["refreshSchedule"], string][]).map(([val, label]) => (
                         <button
                           key={val}
                           onClick={() => cfg("refreshSchedule", val)}
@@ -587,12 +646,12 @@ function AdminPortal({ adminKey, onLogout }) {
 
             <div style={{ background: "#1a1a1a", borderRadius: 12, padding: 20, border: "1px solid #2a2a2a" }}>
               <h4 style={{ margin: "0 0 12px", fontSize: 14 }}>📋 GymDesk Setup</h4>
-              {[
+              {([
                 ["Log into GymDesk", "Go to your website editor"],
                 ['Add the <script> tag to Body Tags', 'Website → Settings → Body Tags — paste the <script src="…/widget.js"> line here'],
                 ["Add the <div> to your page", "Open the page → add a Custom HTML block → paste just the <div id=\"reviews-widget\"></div> line where you want the widget to appear"],
                 ["Save and publish", "The widget will load automatically"],
-              ].map(([title, desc], i) => (
+              ] as [string, string][]).map(([title, desc], i) => (
                 <div key={i} style={{ display: "flex", gap: 12, marginBottom: 12 }}>
                   <div style={{ width: 22, height: 22, borderRadius: "50%", background: "#2a2a2a", border: `1px solid ${config.accentColor}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: config.accentColor, flexShrink: 0 }}>{i+1}</div>
                   <div><div style={{ fontSize: 13, fontWeight: 600 }}>{title}</div><div style={{ fontSize: 12, color: "#666" }}>{desc}</div></div>
@@ -614,17 +673,17 @@ function AdminPortal({ adminKey, onLogout }) {
   );
 }
 
-const snippetCode = (base) =>
+const snippetCode = (base: string) =>
 `<!-- Google Reviews Widget -->
 <div id="reviews-widget"></div>
 <script src="${base}/widget.js"></script>`;
 
 // ─── Widget Preview ───────────────────────────────────────────────────────────
-function WidgetPreview({ reviews, config, meta, mobile }) {
+function WidgetPreview({ reviews, config, meta, mobile }: { reviews: Review[]; config: WidgetConfig; meta: Meta; mobile: boolean }) {
   const [idx, setIdx] = useState(0);
   const style = mobile ? "carousel" : config.displayStyle;
 
-  const cardStyle = {
+  const cardStyle: CSSProperties = {
     background: config.bgColor, color: config.textColor, borderRadius: 12,
     padding: mobile ? 14 : 18, border: `1px solid ${config.accentColor}22`,
     boxShadow: "0 2px 12px rgba(0,0,0,0.08)", display: "flex", flexDirection: "column", gap: 10,
@@ -632,14 +691,14 @@ function WidgetPreview({ reviews, config, meta, mobile }) {
 
   if (!reviews.length) return <div style={{ padding: 40, textAlign: "center", color: "#888", background: config.bgColor, borderRadius: 16 }}>No reviews to preview</div>;
 
-  const truncate = (text) => {
+  const truncate = (text: string) => {
     const max = config.reviewMaxChars;
     if (!max || text.length <= max) return { short: text, truncated: false };
     const cut = text.lastIndexOf(" ", max);
     return { short: text.slice(0, cut > 0 ? cut : max) + "…", truncated: true };
   };
 
-  const ReviewCard = ({ r, extraStyle }) => {
+  const ReviewCard = ({ r, extraStyle }: { r: Review; extraStyle?: CSSProperties }) => {
     const [expanded, setExpanded] = useState(false);
     const { short, truncated } = truncate(r.text);
     return (
@@ -704,10 +763,10 @@ function WidgetPreview({ reviews, config, meta, mobile }) {
 }
 
 // ─── Form Controls ────────────────────────────────────────────────────────────
-const Section   = ({ label, children }) => <div style={{ marginBottom: 20 }}><div style={{ fontSize: 11, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>{label}</div><div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{children}</div></div>;
-const Row       = ({ label, children }) => <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}><span style={{ color: "#ccc" }}>{label}</span>{children}</div>;
-const ToggleRow = ({ label, value, onChange }) => <Row label={label}><div onClick={() => onChange(!value)} style={{ width: 36, height: 20, borderRadius: 10, background: value ? "#4f46e5" : "#444", cursor: "pointer", position: "relative", transition: "background 0.2s" }}><div style={{ width: 16, height: 16, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: value ? 18 : 2, transition: "left 0.2s" }} /></div></Row>;
-const ColorRow  = ({ label, value, onChange }) => <Row label={label}><input type="color" value={value} onChange={e => onChange(e.target.value)} style={{ width: 32, height: 26, borderRadius: 4, border: "none", cursor: "pointer", background: "none" }} /></Row>;
-const RangeRow  = ({ label, value, min, max, onChange }) => <div style={{ fontSize: 13 }}><div style={{ color: "#ccc", marginBottom: 4 }}>{label}</div><input type="range" min={min} max={max} value={value} onChange={e => onChange(e.target.value)} style={{ width: "100%", accentColor: "#4f46e5" }} /></div>;
-const SelectRow = ({ label, value, onChange, options }) => <Row label={label}><select value={value} onChange={e => onChange(e.target.value)} style={{ background: "#2a2a2a", color: "#eee", border: "1px solid #444", borderRadius: 6, padding: "4px 8px", fontSize: 12 }}>{options.map(([v,l]) => <option key={v} value={v}>{l}</option>)}</select></Row>;
-const InputRow  = ({ label, value, onChange }) => <div style={{ fontSize: 13 }}><div style={{ color: "#ccc", marginBottom: 4 }}>{label}</div><input value={value} onChange={e => onChange(e.target.value)} style={{ width: "100%", background: "#2a2a2a", color: "#eee", border: "1px solid #444", borderRadius: 6, padding: "6px 8px", fontSize: 12, boxSizing: "border-box" }} /></div>;
+const Section   = ({ label, children }: { label: string; children: ReactNode }) => <div style={{ marginBottom: 20 }}><div style={{ fontSize: 11, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>{label}</div><div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{children}</div></div>;
+const Row       = ({ label, children }: { label: string; children: ReactNode }) => <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}><span style={{ color: "#ccc" }}>{label}</span>{children}</div>;
+const ToggleRow = ({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) => <Row label={label}><div onClick={() => onChange(!value)} style={{ width: 36, height: 20, borderRadius: 10, background: value ? "#4f46e5" : "#444", cursor: "pointer", position: "relative", transition: "background 0.2s" }}><div style={{ width: 16, height: 16, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: value ? 18 : 2, transition: "left 0.2s" }} /></div></Row>;
+const ColorRow  = ({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) => <Row label={label}><input type="color" value={value} onChange={e => onChange(e.target.value)} style={{ width: 32, height: 26, borderRadius: 4, border: "none", cursor: "pointer", background: "none" }} /></Row>;
+const RangeRow  = ({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (v: string) => void }) => <div style={{ fontSize: 13 }}><div style={{ color: "#ccc", marginBottom: 4 }}>{label}</div><input type="range" min={min} max={max} value={value} onChange={e => onChange(e.target.value)} style={{ width: "100%", accentColor: "#4f46e5" }} /></div>;
+const SelectRow = ({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: [string, string][] }) => <Row label={label}><select value={value} onChange={e => onChange(e.target.value)} style={{ background: "#2a2a2a", color: "#eee", border: "1px solid #444", borderRadius: 6, padding: "4px 8px", fontSize: 12 }}>{options.map(([v,l]) => <option key={v} value={v}>{l}</option>)}</select></Row>;
+const InputRow  = ({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) => <div style={{ fontSize: 13 }}><div style={{ color: "#ccc", marginBottom: 4 }}>{label}</div><input value={value} onChange={e => onChange(e.target.value)} style={{ width: "100%", background: "#2a2a2a", color: "#eee", border: "1px solid #444", borderRadius: 6, padding: "6px 8px", fontSize: 12, boxSizing: "border-box" }} /></div>;

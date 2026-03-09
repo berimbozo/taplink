@@ -1,4 +1,5 @@
 import pg from "pg";
+import type { WidgetConfig } from "./types.js";
 
 const dbUrl = process.env.DATABASE_URL;
 if (!dbUrl || dbUrl.includes("user:password@host")) {
@@ -12,7 +13,7 @@ export const db = new pg.Pool({
   ssl: { rejectUnauthorized: false },
 });
 
-export async function initDB() {
+export async function initDB(): Promise<void> {
   await db.query(`
     CREATE TABLE IF NOT EXISTS widget_config (
       id          SERIAL PRIMARY KEY,
@@ -58,7 +59,7 @@ export async function initDB() {
   console.log("✅ Database tables ready");
 }
 
-export function defaultConfig() {
+export function defaultConfig(): WidgetConfig {
   return {
     accentColor:     "#C41E3A",
     bgColor:         "#ffffff",
@@ -74,12 +75,12 @@ export function defaultConfig() {
     ctaText:         "Book Your Free Trial",
     ctaLink:         "#",
     ctaColor:        "#C41E3A",
-    reviewSource:     "google",
-    refreshSchedule:  "manual",
-    autoAiPick:       false,
+    reviewSource:    "google",
+    refreshSchedule: "manual",
+    autoAiPick:      false,
     showSectionTitle: true,
-    sectionTitle:     "What Our Members Say About Us",
-    reviewMaxChars:   250,
-    showMoreButton:   false,
+    sectionTitle:    "What Our Members Say About Us",
+    reviewMaxChars:  250,
+    showMoreButton:  false,
   };
 }

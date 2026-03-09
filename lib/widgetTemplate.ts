@@ -1,8 +1,8 @@
 /**
  * Returns the embeddable widget script as a string.
- * @param {string} apiBase - The public URL of the backend (no trailing slash).
+ * @param apiBase - The public URL of the backend (no trailing slash).
  */
-export function buildWidgetScript(apiBase) {
+export function buildWidgetScript(apiBase: string): string {
   return `
 (function() {
   const API = "${apiBase}";

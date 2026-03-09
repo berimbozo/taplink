@@ -1,11 +1,12 @@
 import fetch from "node-fetch";
 import { db } from "./db.js";
+import type { Review, CacheEntry, RefreshResult } from "./types.js";
 
 /**
  * Fetches up to 5 reviews from Google Places API for a given Place ID.
  * Note: The free Places API returns max 5 reviews. For more, use Outscraper.
  */
-export async function fetchGoogleReviews() {
+export async function fetchGoogleReviews(): Promise<{ reviews: Review[]; overallRating: number; totalReviews: number }> {
   const placeId = process.env.GOOGLE_PLACE_ID;
   const apiKey  = process.env.GOOGLE_PLACES_API_KEY;
 
@@ -20,14 +21,28 @@ export async function fetchGoogleReviews() {
     `&key=${apiKey}`;
 
   const res  = await fetch(url);
-  const data = await res.json();
+  const data = await res.json() as {
+    status: string;
+    error_message?: string;
+    result: {
+      rating: number;
+      user_ratings_total: number;
+      reviews: Array<{
+        time: number;
+        author_name: string;
+        profile_photo_url?: string;
+        rating: number;
+        text: string;
+      }>;
+    };
+  };
 
   if (data.status !== "OK") {
     throw new Error(`Google Places API error: ${data.status} — ${data.error_message || ""}`);
   }
 
   const place   = data.result;
-  const reviews = (place.reviews || []).map(r => ({
+  const reviews: Review[] = (place.reviews || []).map(r => ({
     id:       r.time.toString(),
     author:   r.author_name,
     avatar:   r.profile_photo_url || null,
@@ -50,7 +65,7 @@ export async function fetchGoogleReviews() {
  * Requires OUTSCRAPER_API_KEY env var.
  * OUTSCRAPER_MAX_REVIEWS controls the cap (default 300).
  */
-export async function fetchOutscraperReviews() {
+export async function fetchOutscraperReviews(): Promise<{ reviews: Review[]; overallRating: number; totalReviews: number }> {
   const apiKey  = process.env.OUTSCRAPER_API_KEY;
   const placeId = process.env.GOOGLE_PLACE_ID;
   const limit   = parseInt(process.env.OUTSCRAPER_MAX_REVIEWS || "300", 10);
@@ -66,7 +81,6 @@ export async function fetchOutscraperReviews() {
 
   const res = await fetch(url.toString(), {
     headers: { "X-API-KEY": apiKey },
-    timeout: 60000,
   });
 
   if (!res.ok) {
@@ -74,13 +88,23 @@ export async function fetchOutscraperReviews() {
     throw new Error(`Outscraper API error ${res.status}: ${text}`);
   }
 
-  const body  = await res.json();
-  // Outscraper wraps results in a { data: [...] } envelope
-  const place = (body.data || body)[0];
+  const body = await res.json() as { data?: unknown[] } | unknown[];
+  const place = ((Array.isArray(body) ? body : (body as { data?: unknown[] }).data) ?? [])[0] as {
+    rating: number;
+    reviews: number;
+    reviews_data: Array<{
+      review_id?: string;
+      review_datetime_utc?: string;
+      author_title: string;
+      author_image?: string;
+      review_rating: number;
+      review_text?: string;
+    }>;
+  } | undefined;
 
   if (!place) throw new Error("No data returned from Outscraper");
 
-  const reviews = (place.reviews_data || []).map(r => ({
+  const reviews: Review[] = (place.reviews_data || []).map(r => ({
     id:       r.review_id || String(r.review_datetime_utc),
     author:   r.author_title,
     avatar:   r.author_image || null,
@@ -100,10 +124,15 @@ export async function fetchOutscraperReviews() {
   };
 }
 
-export async function getCache() {
-  const { rows } = await db.query(
-    "SELECT * FROM review_cache ORDER BY fetched_at DESC LIMIT 1"
-  );
+export async function getCache(): Promise<CacheEntry | null> {
+  const { rows } = await db.query<{
+    reviews: Review[];
+    overall_rating: number;
+    total_reviews: number;
+    source: string;
+    fetched_at: Date;
+  }>("SELECT * FROM review_cache ORDER BY fetched_at DESC LIMIT 1");
+
   if (!rows.length) return null;
   const row = rows[0];
   return {
@@ -119,7 +148,7 @@ export async function getCache() {
  * Fetches fresh reviews from Outscraper, backs up the current cache,
  * and saves the new data. On failure the existing cache is preserved.
  */
-export async function runRefresh() {
+export async function runRefresh(): Promise<RefreshResult> {
   // Fetch first — only touch the DB if the fetch succeeds
   const { reviews, overallRating, totalReviews } = await fetchOutscraperReviews();
 

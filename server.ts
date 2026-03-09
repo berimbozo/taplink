@@ -18,7 +18,7 @@
  * https://github.com/your-org/reviews-widget
  */
 
-import express from "express";
+import express, { type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
@@ -28,6 +28,7 @@ import { db, initDB, defaultConfig } from "./lib/db.js";
 import { fetchGoogleReviews, getCache, runRefresh } from "./lib/reviews.js";
 import { runAiPick } from "./lib/ai.js";
 import { buildWidgetScript } from "./lib/widgetTemplate.js";
+import type { Review } from "./lib/types.js";
 
 dotenv.config();
 
@@ -35,7 +36,7 @@ const app  = express();
 const PORT = process.env.PORT || 3000;
 
 // ─── Env Var Validation ───────────────────────────────────────────────────────
-// DATABASE_URL is checked in lib/db.js (it exits immediately if missing).
+// DATABASE_URL is checked in lib/db.ts (it exits immediately if missing).
 
 if (!process.env.ADMIN_API_KEY) {
   console.error("❌ ADMIN_API_KEY is not set. Set it in your environment variables.");
@@ -59,8 +60,6 @@ if (!process.env.ADMIN_PORTAL_URL) {
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
-// Parse any extra allowed origins from WIDGET_ALLOWED_ORIGINS (comma-separated)
-// e.g. WIDGET_ALLOWED_ORIGINS=https://goldenjj.com,https://www.goldenjj.com
 const extraOrigins = (process.env.WIDGET_ALLOWED_ORIGINS || "")
   .split(",")
   .map(o => o.trim())
@@ -68,9 +67,9 @@ const extraOrigins = (process.env.WIDGET_ALLOWED_ORIGINS || "")
 
 app.use(cors({
   origin: [
-    process.env.ADMIN_PORTAL_URL,  // your Railway admin portal URL
-    /\.gymdesk\.com$/,             // allow all gymdesk subdomains
-    ...extraOrigins,               // custom domains set via env var
+    process.env.ADMIN_PORTAL_URL as string,
+    /\.gymdesk\.com$/,
+    ...extraOrigins,
   ],
   methods: ["GET", "POST"],
   allowedHeaders: ["Content-Type", "x-admin-key"],
@@ -78,11 +77,11 @@ app.use(cors({
 
 app.use(express.json());
 
-// Admin key auth middleware (protects write routes)
-const requireAdminKey = (req, res, next) => {
+const requireAdminKey = (req: Request, res: Response, next: NextFunction): void => {
   const key = req.headers["x-admin-key"];
   if (!key || key !== process.env.ADMIN_API_KEY) {
-    return res.status(401).json({ error: "Unauthorized" });
+    res.status(401).json({ error: "Unauthorized" });
+    return;
   }
   next();
 };
@@ -95,50 +94,39 @@ const aiPickLimiter  = rateLimit({ windowMs: 60 * 60 * 1000, max: 20, message: {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-/**
- * POST /api/login
- * Validates the admin password (set via ADMIN_PASSWORD env var on the backend).
- * Returns the API token on success — never exposes the raw API key in env vars.
- */
-app.post("/api/login", loginLimiter, (req, res) => {
-  const { password } = req.body || {};
+app.post("/api/login", loginLimiter, (req: Request, res: Response): void => {
+  const { password } = req.body as { password?: string };
   if (!process.env.ADMIN_PASSWORD) {
-    return res.status(503).json({ error: "ADMIN_PASSWORD is not configured on the server." });
+    res.status(503).json({ error: "ADMIN_PASSWORD is not configured on the server." });
+    return;
   }
   if (!password || password !== process.env.ADMIN_PASSWORD) {
-    return res.status(401).json({ error: "Incorrect password." });
+    res.status(401).json({ error: "Incorrect password." });
+    return;
   }
   res.json({ token: process.env.ADMIN_API_KEY });
 });
 
-/**
- * GET /api/system/capabilities
- * Tells the frontend which optional features are available on this deployment.
- */
-app.get("/api/system/capabilities", (_req, res) => {
+app.get("/api/system/capabilities", (_req: Request, res: Response): void => {
   res.json({
     outscraperAvailable: !!process.env.OUTSCRAPER_API_KEY,
   });
 });
 
-/**
- * GET /api/reviews
- * If source is 'outscraper': serve from cache merged with pinned state.
- * If source is 'google': fetch live from Google Places.
- */
-app.get("/api/reviews", async (_req, res) => {
+app.get("/api/reviews", async (_req: Request, res: Response): Promise<void> => {
   try {
-    const { rows: cfgRows } = await db.query(
+    const { rows: cfgRows } = await db.query<{ value: { reviewSource?: string } }>(
       "SELECT value FROM widget_config WHERE key = 'main'"
     );
     const source = cfgRows[0]?.value?.reviewSource || "google";
 
-    let reviews, overallRating, totalReviews;
+    let reviews: Review[], overallRating: number | null, totalReviews: number | null;
 
     if (source === "outscraper") {
       const cache = await getCache();
       if (!cache) {
-        return res.json({ reviews: [], overallRating: null, totalReviews: null, cacheEmpty: true });
+        res.json({ reviews: [], overallRating: null, totalReviews: null, cacheEmpty: true });
+        return;
       }
       reviews       = cache.reviews;
       overallRating = cache.overallRating;
@@ -147,33 +135,33 @@ app.get("/api/reviews", async (_req, res) => {
       ({ reviews, overallRating, totalReviews } = await fetchGoogleReviews());
     }
 
-    // Merge pinned/ai state from DB
-    const { rows } = await db.query("SELECT * FROM pinned_reviews");
+    const { rows } = await db.query<{ review_id: string; pinned: boolean; ai_picked: boolean }>(
+      "SELECT * FROM pinned_reviews"
+    );
     const stateMap  = Object.fromEntries(rows.map(r => [r.review_id, r]));
     const merged    = reviews.map(r => ({
       ...r,
-      pinned:   stateMap[r.id]?.pinned   ?? false,
+      pinned:   stateMap[r.id]?.pinned    ?? false,
       aiPicked: stateMap[r.id]?.ai_picked ?? false,
     }));
 
     res.json({ reviews: merged, overallRating, totalReviews });
   } catch (err) {
-    console.error("Error fetching reviews:", err.message);
-    res.status(500).json({ error: err.message });
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Error fetching reviews:", msg);
+    res.status(500).json({ error: msg });
   }
 });
 
-/**
- * GET /api/reviews/cache-status
- * Returns info about the last Outscraper fetch: timestamp, success, error.
- */
-app.get("/api/reviews/cache-status", async (_req, res) => {
+app.get("/api/reviews/cache-status", async (_req: Request, res: Response): Promise<void> => {
   try {
     const cache = await getCache();
 
-    const { rows: logRows } = await db.query(
-      "SELECT * FROM refresh_log ORDER BY created_at DESC LIMIT 1"
-    );
+    const { rows: logRows } = await db.query<{
+      success: boolean;
+      error_message: string | null;
+      created_at: Date;
+    }>("SELECT * FROM refresh_log ORDER BY created_at DESC LIMIT 1");
     const lastLog = logRows[0] || null;
 
     res.json({
@@ -186,36 +174,31 @@ app.get("/api/reviews/cache-status", async (_req, res) => {
       lastRefreshAt:       lastLog?.created_at || null,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
   }
 });
 
-/**
- * POST /api/reviews/refresh
- * Manually triggers an Outscraper fetch and updates the cache.
- */
-app.post("/api/reviews/refresh", requireAdminKey, refreshLimiter, async (_req, res) => {
+app.post("/api/reviews/refresh", requireAdminKey, refreshLimiter, async (_req: Request, res: Response): Promise<void> => {
   try {
     const { reviewCount } = await runRefresh();
     res.json({ success: true, reviewCount });
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     await db.query(
       "INSERT INTO refresh_log (success, error_message, source) VALUES (FALSE, $1, 'outscraper')",
-      [err.message]
+      [msg]
     ).catch(() => {});
-    console.error("Manual refresh failed:", err.message);
-    res.status(500).json({ error: err.message });
+    console.error("Manual refresh failed:", msg);
+    res.status(500).json({ error: msg });
   }
 });
 
-/**
- * POST /api/reviews/pin
- * Body: { reviewId: string, pinned: boolean }
- */
-app.post("/api/reviews/pin", requireAdminKey, async (req, res) => {
-  const { reviewId, pinned } = req.body;
+app.post("/api/reviews/pin", requireAdminKey, async (req: Request, res: Response): Promise<void> => {
+  const { reviewId, pinned } = req.body as { reviewId?: string; pinned?: boolean };
   if (!reviewId || typeof pinned !== "boolean") {
-    return res.status(400).json({ error: "reviewId and pinned (boolean) required" });
+    res.status(400).json({ error: "reviewId and pinned (boolean) required" });
+    return;
   }
   await db.query(`
     INSERT INTO pinned_reviews (review_id, pinned)
@@ -225,27 +208,25 @@ app.post("/api/reviews/pin", requireAdminKey, async (req, res) => {
   res.json({ success: true });
 });
 
-/**
- * GET /api/config
- */
-app.get("/api/config", async (_req, res) => {
+app.get("/api/config", async (_req: Request, res: Response): Promise<void> => {
   try {
-    const { rows } = await db.query(
+    const { rows } = await db.query<{ value: Record<string, unknown> }>(
       "SELECT value FROM widget_config WHERE key = 'main'"
     );
-    if (rows.length === 0) return res.json(defaultConfig());
+    if (rows.length === 0) {
+      res.json(defaultConfig());
+      return;
+    }
     res.json(rows[0].value);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
   }
 });
 
-/**
- * POST /api/config
- */
-app.post("/api/config", requireAdminKey, async (req, res) => {
+app.post("/api/config", requireAdminKey, async (req: Request, res: Response): Promise<void> => {
   try {
-    const config = req.body;
+    const config = req.body as Record<string, unknown>;
     await db.query(`
       INSERT INTO widget_config (key, value, updated_at)
       VALUES ('main', $1, NOW())
@@ -253,49 +234,44 @@ app.post("/api/config", requireAdminKey, async (req, res) => {
     `, [JSON.stringify(config)]);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
   }
 });
 
-/**
- * POST /api/ai-pick
- * If source is 'outscraper', uses all cached reviews.
- * If source is 'google', uses the reviews array from the request body.
- */
-app.post("/api/ai-pick", requireAdminKey, aiPickLimiter, async (req, res) => {
+app.post("/api/ai-pick", requireAdminKey, aiPickLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { rows: cfgRows } = await db.query(
+    const { rows: cfgRows } = await db.query<{ value: { reviewSource?: string } }>(
       "SELECT value FROM widget_config WHERE key = 'main'"
     );
     const source = cfgRows[0]?.value?.reviewSource || "google";
 
-    let reviews;
+    let reviews: Review[];
     if (source === "outscraper") {
       const cache = await getCache();
       if (!cache || !cache.reviews?.length) {
-        return res.status(400).json({ error: "No cached reviews. Run a refresh first." });
+        res.status(400).json({ error: "No cached reviews. Run a refresh first." });
+        return;
       }
       reviews = cache.reviews;
     } else {
-      reviews = req.body.reviews;
-      if (!reviews?.length) {
-        return res.status(400).json({ error: "reviews array required" });
+      reviews = (req.body as { reviews?: Review[] }).reviews ?? [];
+      if (!reviews.length) {
+        res.status(400).json({ error: "reviews array required" });
+        return;
       }
     }
 
     const result = await runAiPick(reviews);
     res.json(result);
   } catch (err) {
-    console.error("Claude API error:", err.message);
-    res.status(500).json({ error: "AI pick failed: " + err.message });
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Claude API error:", msg);
+    res.status(500).json({ error: "AI pick failed: " + msg });
   }
 });
 
-/**
- * GET /widget.js
- * Serves the embeddable widget script.
- */
-app.get("/widget.js", (_req, res) => {
+app.get("/widget.js", (_req: Request, res: Response): void => {
   res.setHeader("Content-Type", "application/javascript");
   res.setHeader("Cache-Control", "public, max-age=300");
   const apiBase = process.env.API_BASE_URL || "https://your-app.up.railway.app";
@@ -304,17 +280,15 @@ app.get("/widget.js", (_req, res) => {
 
 // ─── Weekly Cron ──────────────────────────────────────────────────────────────
 
-// Runs every Sunday at 2am. Checks config at runtime so toggling the setting
-// takes effect without a redeploy.
 cron.schedule("0 2 * * 0", async () => {
   try {
-    const { rows } = await db.query(
+    const { rows } = await db.query<{ value: { reviewSource?: string; refreshSchedule?: string; autoAiPick?: boolean } }>(
       "SELECT value FROM widget_config WHERE key = 'main'"
     );
     const config = rows[0]?.value || {};
 
     if (config.reviewSource !== "outscraper" || config.refreshSchedule !== "weekly") {
-      return; // Weekly refresh not enabled
+      return;
     }
 
     console.log("🕐 Weekly review refresh starting...");
@@ -329,10 +303,11 @@ cron.schedule("0 2 * * 0", async () => {
       }
     }
   } catch (err) {
-    console.error("❌ Weekly refresh error:", err.message);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("❌ Weekly refresh error:", msg);
     await db.query(
       "INSERT INTO refresh_log (success, error_message, source) VALUES (FALSE, $1, 'outscraper')",
-      [err.message]
+      [msg]
     ).catch(() => {});
   }
 });

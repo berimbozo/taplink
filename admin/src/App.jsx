@@ -1,56 +1,42 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const API_BASE = import.meta.env?.VITE_API_BASE_URL ?? "https://your-app.up.railway.app";
+const API_BASE     = import.meta.env?.VITE_API_BASE_URL   ?? "https://your-app.up.railway.app";
+const ADMIN_KEY    = import.meta.env?.VITE_ADMIN_API_KEY  ?? "";
+const ADMIN_PASS   = import.meta.env?.VITE_ADMIN_PASSWORD ?? "";
+const SESSION_FLAG = "rw_logged_in";
 
-// api(key) returns a scoped fetch helper for a given admin key
-function makeApi(key) {
-  return {
-    get:  (path)       => fetch(`${API_BASE}${path}`).then(async r => {
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
-      return data;
-    }),
-    post: (path, body) => fetch(`${API_BASE}${path}`, {
-      method:  "POST",
-      headers: { "Content-Type": "application/json", "x-admin-key": key },
-      body:    JSON.stringify(body),
-    }).then(async r => {
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
-      return data;
-    }),
-  };
-}
-
-const SESSION_KEY = "rw_admin_key";
+const api = {
+  get:  (path)       => fetch(`${API_BASE}${path}`).then(async r => {
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
+    return data;
+  }),
+  post: (path, body) => fetch(`${API_BASE}${path}`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json", "x-admin-key": ADMIN_KEY },
+    body:    JSON.stringify(body),
+  }).then(async r => {
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
+    return data;
+  }),
+};
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
 function LoginScreen({ onLogin }) {
-  const [key, setKey]         = useState(import.meta.env?.VITE_ADMIN_API_KEY ?? "");
-  const [error, setError]     = useState(null);
-  const [checking, setChecking] = useState(false);
+  const [password, setPassword] = useState("");
+  const [error, setError]       = useState(null);
 
-  const attempt = async (e) => {
+  const attempt = (e) => {
     e.preventDefault();
-    if (!key.trim()) return;
-    setChecking(true);
-    setError(null);
-    try {
-      await makeApi(key.trim()).post("/api/auth", {});
-      sessionStorage.setItem(SESSION_KEY, key.trim());
-      onLogin(key.trim());
-    } catch (err) {
-      if (err.message.includes("401") || err.message.toLowerCase().includes("unauthorized")) {
-        setError("Incorrect admin key.");
-      } else {
-        // Network/server error — key may be correct, let them in
-        sessionStorage.setItem(SESSION_KEY, key.trim());
-        onLogin(key.trim());
-      }
-    } finally {
-      setChecking(false);
+    if (!password) return;
+    if (ADMIN_PASS && password !== ADMIN_PASS) {
+      setError("Incorrect password.");
+      return;
     }
+    sessionStorage.setItem(SESSION_FLAG, "1");
+    onLogin();
   };
 
   return (
@@ -59,20 +45,20 @@ function LoginScreen({ onLogin }) {
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <div style={{ fontSize: 32, marginBottom: 8 }}>🥋</div>
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: "#fff" }}>Reviews Admin</h1>
-          <p style={{ margin: "6px 0 0", fontSize: 13, color: "#666" }}>Enter your admin key to continue</p>
+          <p style={{ margin: "6px 0 0", fontSize: 13, color: "#666" }}>Enter your password to continue</p>
         </div>
         <form onSubmit={attempt} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <input
             type="password"
-            placeholder="Admin key"
-            value={key}
-            onChange={e => setKey(e.target.value)}
+            placeholder="Password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
             autoFocus
             style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #2a2a2a", background: "#1a1a1a", color: "#fff", fontSize: 14, outline: "none" }}
           />
           {error && <div style={{ fontSize: 12, color: "#f87171", textAlign: "center" }}>{error}</div>}
-          <button type="submit" disabled={checking || !key.trim()} style={{ padding: "11px", borderRadius: 8, border: "none", background: "#C41E3A", color: "#fff", fontWeight: 700, fontSize: 14, cursor: checking ? "not-allowed" : "pointer", opacity: checking ? 0.7 : 1 }}>
-            {checking ? "Checking…" : "Login"}
+          <button type="submit" disabled={!password} style={{ padding: "11px", borderRadius: 8, border: "none", background: "#C41E3A", color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
+            Login
           </button>
         </form>
       </div>
@@ -133,17 +119,16 @@ const TABS = ["Reviews", "Appearance", "Settings", "Embed"];
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [adminKey, setAdminKey] = useState(() => sessionStorage.getItem(SESSION_KEY) || "");
+  const [loggedIn, setLoggedIn] = useState(() => !!sessionStorage.getItem(SESSION_FLAG));
 
-  if (!adminKey) {
-    return <LoginScreen onLogin={setAdminKey} />;
+  if (!loggedIn) {
+    return <LoginScreen onLogin={() => setLoggedIn(true)} />;
   }
 
-  return <AdminPortal adminKey={adminKey} onLogout={() => { sessionStorage.removeItem(SESSION_KEY); setAdminKey(""); }} />;
+  return <AdminPortal onLogout={() => { sessionStorage.removeItem(SESSION_FLAG); setLoggedIn(false); }} />;
 }
 
-function AdminPortal({ adminKey, onLogout }) {
-  const api = makeApi(adminKey);
+function AdminPortal({ onLogout }) {
   const [tab, setTab]                   = useState("Reviews");
   const [reviews, setReviews]           = useState([]);
   const [meta, setMeta]                 = useState({ overallRating: null, totalReviews: null });

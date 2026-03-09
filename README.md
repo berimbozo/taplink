@@ -184,7 +184,8 @@ bjj-reviews-widget/
 | `ADMIN_PORTAL_URL` | Backend | Your portal URL (for CORS) |
 | `DATABASE_URL` | Backend | Set manually — copy from Railway Postgres service Variables (auto-injection can silently fail) |
 | `VITE_API_BASE_URL` | Portal | Points to your backend |
-| `VITE_ADMIN_API_KEY` | Portal | Same as backend `ADMIN_API_KEY` |
+| `VITE_ADMIN_API_KEY` | Portal | Same as backend `ADMIN_API_KEY` — used silently for API auth |
+| `VITE_ADMIN_PASSWORD` | Portal | The password shown on the portal login screen (you choose this) |
 
 ---
 

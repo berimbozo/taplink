@@ -224,19 +224,20 @@ The admin portal is a static React build — after `npm run build` inside `/admi
 
 ## ⚠️ Known Limitations
 
-- **Google Places API returns a maximum of 5 reviews** for free. This is a Google limitation — not something we can work around without a paid third-party data provider.
+- **Google Places API returns a maximum of 5 reviews** for free. This is a Google limitation — use the Outscraper integration to fetch all your reviews instead.
 - The AI pick feature requires an Anthropic API key and costs a small amount per use (~$0.01).
-- This is a v1 — it works great but has no built-in user authentication beyond the admin key. Keep your `ADMIN_API_KEY` private and don't share the portal URL publicly.
+- The admin portal is protected by a password login screen — keep your `VITE_ADMIN_PASSWORD` private.
 
 ---
 
 ## 🗺️ Roadmap / Future Ideas
 
+- [x] Auto-refresh reviews on a schedule (weekly cron job)
+- [x] Password-protected admin login
+- [x] Multiple display styles (carousel, grid, row, list)
+- [x] Outscraper integration to fetch all reviews (not just Google's 5-review limit)
 - [ ] Support for multiple locations / Place IDs
-- [ ] Auto-refresh reviews on a schedule (cron job)
 - [ ] Email alert when a new review comes in
-- [ ] More widget themes and layout options
-- [ ] Password-protected admin login UI
 - [ ] Export reviews to CSV
 
 PRs welcome! If you're a gym owner who uses this and wants a feature, open an issue.

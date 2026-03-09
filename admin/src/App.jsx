@@ -60,9 +60,12 @@ const defaultConfig = {
   ctaText:         "Book Your Free Trial",
   ctaLink:         "#",
   ctaColor:        "#C41E3A",
-  reviewSource:    "google",
-  refreshSchedule: "manual",
-  autoAiPick:      false,
+  reviewSource:     "google",
+  refreshSchedule:  "manual",
+  autoAiPick:       false,
+  showSectionTitle: true,
+  sectionTitle:     "What Our Members Say About Us",
+  reviewMaxChars:   250,
 };
 
 const TABS = ["Reviews", "Appearance", "Settings", "Embed"];
@@ -373,10 +376,16 @@ export default function App() {
                 <ToggleRow label="Show rating badge"   value={config.showBadge}  onChange={v => cfg("showBadge", v)} />
               </Section>
 
+              <Section label="Header">
+                <ToggleRow label="Show section title" value={config.showSectionTitle} onChange={v => cfg("showSectionTitle", v)} />
+                {config.showSectionTitle && <InputRow label="Title text" value={config.sectionTitle} onChange={v => cfg("sectionTitle", v)} />}
+              </Section>
+
               <Section label="Layout">
-                <SelectRow label="Style" value={config.displayStyle} onChange={v => cfg("displayStyle", v)} options={[["carousel","Carousel"],["grid","Grid"],["list","List"]]} />
+                <SelectRow label="Style" value={config.displayStyle} onChange={v => cfg("displayStyle", v)} options={[["carousel","Carousel"],["row","Single Row"],["grid","Grid"],["list","List"]]} />
                 <RangeRow label={`Max reviews: ${config.maxReviews}`} value={config.maxReviews} min={1} max={8} onChange={v => cfg("maxReviews", Number(v))} />
                 <RangeRow label={`Min rating: ${config.minRating}★`} value={config.minRating} min={1} max={5} onChange={v => cfg("minRating", Number(v))} />
+                <RangeRow label={`Truncate after: ${config.reviewMaxChars > 0 ? config.reviewMaxChars + " chars" : "off"}`} value={config.reviewMaxChars} min={0} max={600} onChange={v => cfg("reviewMaxChars", Number(v))} />
               </Section>
 
               <Section label="Call to Action">
@@ -544,24 +553,44 @@ function WidgetPreview({ reviews, config, meta, mobile }) {
     boxShadow: "0 2px 12px rgba(0,0,0,0.08)", display: "flex", flexDirection: "column", gap: 10,
   };
 
-  const ReviewCard = ({ r }) => (
-    <div style={cardStyle}>
-      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-        {config.showPhoto && r.avatar && <img src={r.avatar} alt={r.author} style={{ width: 38, height: 38, borderRadius: "50%" }} />}
-        <div>
-          {config.showName  && <div style={{ fontWeight: 700, fontSize: 13 }}>{r.author}</div>}
-          {config.showStars && <Stars rating={r.rating} />}
-        </div>
-        <div style={{ marginLeft: "auto", fontSize: 11, color: "#999" }}>{r.date}</div>
-      </div>
-      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: config.textColor + "cc" }}>{r.text}</p>
-    </div>
-  );
-
   if (!reviews.length) return <div style={{ padding: 40, textAlign: "center", color: "#888", background: config.bgColor, borderRadius: 16 }}>No reviews to preview</div>;
+
+  const truncate = (text) => {
+    const max = config.reviewMaxChars;
+    if (!max || text.length <= max) return { short: text, truncated: false };
+    const cut = text.lastIndexOf(" ", max);
+    return { short: text.slice(0, cut > 0 ? cut : max) + "…", truncated: true };
+  };
+
+  const ReviewCard = ({ r, extraStyle }) => {
+    const [expanded, setExpanded] = useState(false);
+    const { short, truncated } = truncate(r.text);
+    return (
+      <div style={{ ...cardStyle, ...extraStyle }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          {config.showPhoto && r.avatar && <img src={r.avatar} alt={r.author} style={{ width: 38, height: 38, borderRadius: "50%" }} />}
+          <div>
+            {config.showName  && <div style={{ fontWeight: 700, fontSize: 13 }}>{r.author}</div>}
+            {config.showStars && <Stars rating={r.rating} />}
+          </div>
+          <div style={{ marginLeft: "auto", fontSize: 11, color: "#999" }}>{r.date}</div>
+        </div>
+        <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: config.textColor + "cc" }}>
+          {expanded ? r.text : short}
+          {truncated && !expanded && <button onClick={() => setExpanded(true)} style={{ background: "none", border: "none", color: config.accentColor, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: 0, marginLeft: 4 }}>Read more</button>}
+          {truncated && expanded && <button onClick={() => setExpanded(false)} style={{ background: "none", border: "none", color: config.accentColor, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: 0, marginLeft: 4 }}>Show less</button>}
+        </p>
+      </div>
+    );
+  };
 
   return (
     <div style={{ background: config.bgColor, borderRadius: 16, padding: mobile ? 14 : 24, fontFamily: "inherit" }}>
+      {config.showSectionTitle && config.sectionTitle && (
+        <div style={{ textAlign: "center", marginBottom: 20 }}>
+          <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: config.textColor }}>{config.sectionTitle}</h2>
+        </div>
+      )}
       {config.showBadge && meta.overallRating && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, padding: "10px 14px", background: config.accentColor + "11", borderRadius: 10, border: `1px solid ${config.accentColor}33` }}>
           <span style={{ fontSize: 24, fontWeight: 800, color: config.accentColor }}>{meta.overallRating}</span>
@@ -579,6 +608,7 @@ function WidgetPreview({ reviews, config, meta, mobile }) {
           </div>
         </div>
       )}
+      {style === "row"  && <div style={{ display: "flex", flexDirection: "row", gap: 16, overflowX: "auto", paddingBottom: 8, alignItems: "stretch" }}>{reviews.map(r => <ReviewCard key={r.id} r={r} extraStyle={{ flex: "0 0 240px" }} />)}</div>}
       {style === "grid" && <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12 }}>{reviews.slice(0,4).map(r => <ReviewCard key={r.id} r={r} />)}</div>}
       {style === "list" && <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{reviews.map(r => <ReviewCard key={r.id} r={r} />)}</div>}
 

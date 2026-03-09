@@ -613,11 +613,12 @@ app.get("/widget.js", async (_req, res) => {
   function render(el, cfg, reviews, overallRating, totalReviews) {
     const isMobile = window.innerWidth < 768;
     const style    = isMobile && cfg.displayStyle !== "row" ? "carousel" : cfg.displayStyle;
+    const pageSize = cfg.maxReviews || 6;
 
     // Filter reviews: prefer pinned + aiPicked, fall back to all above minRating
+    // Don't slice here — pageSize controls the initial visible count
     let display = reviews.filter(r => r.pinned || r.aiPicked);
     if (display.length === 0) display = reviews.filter(r => r.rating >= (cfg.minRating || 4));
-    display = display.slice(0, cfg.maxReviews || 6);
 
     const wrap = document.createElement("div");
     wrap.style.cssText = "font-family:system-ui,sans-serif;background:" + cfg.bgColor + ";color:" + cfg.textColor + ";border-radius:16px;padding:24px;box-sizing:border-box;";
@@ -638,13 +639,15 @@ app.get("/widget.js", async (_req, res) => {
     }
 
     if (style === "carousel") {
+      // Carousel cycles through a fixed set — cap at pageSize, no show-more needed
+      const carouselDisplay = display.slice(0, pageSize);
       let idx = 0;
       const carouselId = "rw-" + Math.random().toString(36).slice(2);
       wrap.innerHTML += '<div id="' + carouselId + '">'
-        + display.map((r,i) => buildCard(r, cfg, 'display:' + (i===0?"block":"none") + ';')).join("")
+        + carouselDisplay.map((r,i) => buildCard(r, cfg, 'display:' + (i===0?"block":"none") + ';')).join("")
         + '<div style="display:flex;justify-content:center;gap:8px;margin-top:12px;align-items:center;">'
         + '<button id="' + carouselId + '-prev" style="width:28px;height:28px;border-radius:50%;border:1px solid ' + cfg.accentColor + ';background:transparent;color:' + cfg.accentColor + ';cursor:pointer;font-size:16px">&#8249;</button>'
-        + display.map((_,i) => '<div id="' + carouselId + '-dot-' + i + '" style="width:7px;height:7px;border-radius:50%;background:' + (i===0?cfg.accentColor:cfg.accentColor+'44') + ';cursor:pointer;display:inline-block"></div>').join("")
+        + carouselDisplay.map((_,i) => '<div id="' + carouselId + '-dot-' + i + '" style="width:7px;height:7px;border-radius:50%;background:' + (i===0?cfg.accentColor:cfg.accentColor+'44') + ';cursor:pointer;display:inline-block"></div>').join("")
         + '<button id="' + carouselId + '-next" style="width:28px;height:28px;border-radius:50%;border:1px solid ' + cfg.accentColor + ';background:transparent;color:' + cfg.accentColor + ';cursor:pointer;font-size:16px">&#8250;</button>'
         + '</div></div>';
 
@@ -652,32 +655,54 @@ app.get("/widget.js", async (_req, res) => {
       wireReadMore(wrap);
 
       const showCard = (n) => {
-        idx = (n + display.length) % display.length;
+        idx = (n + carouselDisplay.length) % carouselDisplay.length;
         wrap.querySelectorAll(".rw-card").forEach((c,i) => c.style.display = i===idx?"block":"none");
-        display.forEach((_,i) => { const d = document.getElementById(carouselId+"-dot-"+i); if(d) d.style.background = i===idx ? cfg.accentColor : cfg.accentColor+"44"; });
+        carouselDisplay.forEach((_,i) => { const d = document.getElementById(carouselId+"-dot-"+i); if(d) d.style.background = i===idx ? cfg.accentColor : cfg.accentColor+"44"; });
       };
       document.getElementById(carouselId+"-prev")?.addEventListener("click", () => showCard(idx-1));
       document.getElementById(carouselId+"-next")?.addEventListener("click", () => showCard(idx+1));
-      display.forEach((_,i) => document.getElementById(carouselId+"-dot-"+i)?.addEventListener("click", () => showCard(i)));
+      carouselDisplay.forEach((_,i) => document.getElementById(carouselId+"-dot-"+i)?.addEventListener("click", () => showCard(i)));
       setInterval(() => showCard(idx+1), 5000);
 
-    } else if (style === "grid") {
-      wrap.innerHTML += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px">'
-        + display.map(r => buildCard(r, cfg)).join("") + '</div>';
-      el.appendChild(wrap);
-      wireReadMore(wrap);
-
-    } else if (style === "row") {
-      wrap.innerHTML += '<div style="display:flex;flex-direction:row;gap:16px;overflow-x:auto;padding-bottom:8px;align-items:stretch;">'
-        + display.map(r => buildCard(r, cfg, 'flex:0 0 260px;display:flex;flex-direction:column;')).join("") + '</div>';
-      el.appendChild(wrap);
-      wireReadMore(wrap);
-
     } else {
-      wrap.innerHTML += '<div style="display:flex;flex-direction:column;gap:10px">'
-        + display.map(r => buildCard(r, cfg)).join("") + '</div>';
+      // Grid, row, list — all support "Show more" pagination
+      let containerStyle, cardExtra = "";
+      if (style === "grid") {
+        containerStyle = "display:grid;grid-template-columns:repeat(2,1fr);gap:12px";
+      } else if (style === "row") {
+        containerStyle = "display:flex;flex-direction:row;gap:16px;overflow-x:auto;padding-bottom:8px;align-items:stretch;";
+        cardExtra = "flex:0 0 260px;display:flex;flex-direction:column;";
+      } else {
+        containerStyle = "display:flex;flex-direction:column;gap:10px";
+      }
+
+      const cc = document.createElement("div");
+      cc.style.cssText = containerStyle;
+      let shown = Math.min(pageSize, display.length);
+
+      function refreshCards() {
+        cc.innerHTML = display.slice(0, shown).map(r => buildCard(r, cfg, cardExtra)).join("");
+        wireReadMore(cc);
+      }
+      refreshCards();
+      wrap.appendChild(cc);
       el.appendChild(wrap);
-      wireReadMore(wrap);
+
+      // Show more button
+      if (cfg.showMoreButton && display.length > pageSize) {
+        const moreDiv = document.createElement("div");
+        moreDiv.style.cssText = "text-align:center;margin-top:14px;";
+        const moreBtn = document.createElement("button");
+        moreBtn.textContent = "Show more reviews";
+        moreBtn.style.cssText = "background:none;border:1px solid " + cfg.accentColor + ";color:" + cfg.accentColor + ";padding:8px 22px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;";
+        moreBtn.addEventListener("click", () => {
+          shown = Math.min(shown + pageSize, display.length);
+          refreshCards();
+          if (shown >= display.length) moreDiv.style.display = "none";
+        });
+        moreDiv.appendChild(moreBtn);
+        el.appendChild(moreDiv);
+      }
     }
 
     // CTA
@@ -687,15 +712,6 @@ app.get("/widget.js", async (_req, res) => {
       cta.style.marginTop = "18px";
       cta.innerHTML = '<a href="'+cfg.ctaLink+'" style="display:inline-block;padding:11px 28px;border-radius:8px;background:'+cfg.ctaColor+';color:#fff;font-weight:700;font-size:14px;text-decoration:none">'+cfg.ctaText+'</a>';
       el.appendChild(cta);
-    }
-
-    // Read more reviews link
-    if (cfg.showReviewsLink && cfg.reviewsUrl) {
-      const more = document.createElement("div");
-      more.style.textAlign = "center";
-      more.style.marginTop = "12px";
-      more.innerHTML = '<a href="'+cfg.reviewsUrl+'" target="_blank" rel="noopener noreferrer" style="font-size:13px;color:'+cfg.accentColor+';text-decoration:none;font-weight:600">Read more reviews &#8250;</a>';
-      el.appendChild(more);
     }
   }
 
@@ -768,8 +784,7 @@ function defaultConfig() {
     showSectionTitle: true,
     sectionTitle:     "What Our Members Say About Us",
     reviewMaxChars:   250,
-    showReviewsLink:  false,
-    reviewsUrl:       "",
+    showMoreButton:   false,
   };
 }
 

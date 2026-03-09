@@ -111,8 +111,7 @@ const defaultConfig = {
   showSectionTitle: true,
   sectionTitle:     "What Our Members Say About Us",
   reviewMaxChars:   250,
-  showReviewsLink:  false,
-  reviewsUrl:       "",
+  showMoreButton:   false,
 };
 
 const TABS = ["Reviews", "Appearance", "Settings", "Embed"];
@@ -455,9 +454,8 @@ function AdminPortal({ onLogout }) {
                 </>}
               </Section>
 
-              <Section label="Reviews Link">
-                <ToggleRow label='Show "Read more reviews" link' value={config.showReviewsLink} onChange={v => cfg("showReviewsLink", v)} />
-                {config.showReviewsLink && <InputRow label="Google Reviews URL" value={config.reviewsUrl} onChange={v => cfg("reviewsUrl", v)} />}
+              <Section label="Show More">
+                <ToggleRow label='Show "Show more reviews" button' value={config.showMoreButton} onChange={v => cfg("showMoreButton", v)} />
               </Section>
 
               <button onClick={() => saveConfig()} disabled={saving} style={{ width: "100%", padding: "10px", borderRadius: 8, border: "none", background: saving ? "#333" : config.accentColor, color: "#fff", fontWeight: 700, fontSize: 14, cursor: saving ? "not-allowed" : "pointer", marginTop: 4 }}>
@@ -675,14 +673,14 @@ function WidgetPreview({ reviews, config, meta, mobile }) {
       {style === "grid" && <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12 }}>{reviews.slice(0,4).map(r => <ReviewCard key={r.id} r={r} />)}</div>}
       {style === "list" && <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{reviews.map(r => <ReviewCard key={r.id} r={r} />)}</div>}
 
+      {config.showMoreButton && style !== "carousel" && (
+        <div style={{ textAlign: "center", marginTop: 14 }}>
+          <button style={{ background: "none", border: `1px solid ${config.accentColor}`, color: config.accentColor, padding: "8px 22px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Show more reviews</button>
+        </div>
+      )}
       {config.ctaEnabled && (
         <div style={{ textAlign: "center", marginTop: 18 }}>
           <a href={config.ctaLink} style={{ display: "inline-block", padding: "11px 28px", borderRadius: 8, background: config.ctaColor, color: "#fff", fontWeight: 700, fontSize: 14, textDecoration: "none" }}>{config.ctaText}</a>
-        </div>
-      )}
-      {config.showReviewsLink && config.reviewsUrl && (
-        <div style={{ textAlign: "center", marginTop: 12 }}>
-          <a href={config.reviewsUrl} style={{ fontSize: 13, color: config.accentColor, textDecoration: "none", fontWeight: 600 }}>Read more reviews ›</a>
         </div>
       )}
     </div>

@@ -189,6 +189,39 @@ bjj-reviews-widget/
 
 ---
 
+## 🖥️ Self-Hosting (Beyond Railway)
+
+Railway is the easiest way to get started, but since this is a standard Node.js + Postgres app you can run it anywhere.
+
+**Other hosting options:**
+
+| Option | Cost | Notes |
+|---|---|---|
+| **Fly.io** | Free tier (resets monthly) | More CLI-heavy setup, but genuinely free for small apps |
+| **Render** | Free web service + free Postgres (90 days, then $7/mo) | Free tier spins down after inactivity — first load is slow |
+| **DigitalOcean / Linode / Hetzner VPS** | ~$4–6/mo | You manage your own server and Postgres |
+| **Raspberry Pi / home server** | $0/mo after hardware | Use [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) to expose it publicly — no port forwarding needed |
+
+**Running it yourself (any Linux server):**
+
+```bash
+# Install dependencies
+npm install
+
+# Set your environment variables (copy .env.example to .env and fill it in)
+cp .env.example .env
+
+# Run with pm2 to keep it alive
+npm install -g pm2
+pm2 start server.js --name reviews-widget
+pm2 save
+pm2 startup
+```
+
+The admin portal is a static React build — after `npm run build` inside `/admin`, serve the `dist/` folder with any static host (Nginx, Caddy, Netlify, Cloudflare Pages, etc.).
+
+---
+
 ## ⚠️ Known Limitations
 
 - **Google Places API returns a maximum of 5 reviews** for free. This is a Google limitation — not something we can work around without a paid third-party data provider.

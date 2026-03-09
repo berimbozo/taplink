@@ -598,6 +598,20 @@ app.get("/widget.js", async (_req, res) => {
     }
   }
 
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function safeSrc(url) {
+    // Block javascript: and data: URIs in href/src attributes
+    return /^https?:\/\//i.test(String(url || "")) ? url : "#";
+  }
+
   function stars(n) {
     return Array.from({length:5}, (_,i) =>
       '<span style="color:' + (i < n ? "#FBBF24" : "#ddd") + '">★</span>'
@@ -612,7 +626,8 @@ app.get("/widget.js", async (_req, res) => {
 
   function buildCard(r, cfg, extraStyle) {
     const maxChars = cfg.reviewMaxChars || 0;
-    const { short, full } = truncateText(r.text, maxChars);
+    const safeText = escapeHtml(r.text);
+    const { short, full } = truncateText(safeText, maxChars);
     const uid = "rw-rm-" + Math.random().toString(36).slice(2);
     const readMore = full
       ? '<span id="' + uid + '-short">' + short + '… <button class="rw-readmore" data-uid="' + uid + '" style="background:none;border:none;color:' + (cfg.accentColor||"#C41E3A") + ';cursor:pointer;font-size:12px;font-weight:700;padding:0">Read more</button></span>'
@@ -620,9 +635,9 @@ app.get("/widget.js", async (_req, res) => {
       : short;
     return '<div class="rw-card" style="background:' + cfg.bgColor + ';border:1px solid ' + cfg.accentColor + '22;border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,0.07);box-sizing:border-box;' + (extraStyle||"") + '">'
       + '<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;">'
-      + (cfg.showPhoto && r.avatar ? '<img src="' + r.avatar + '" style="width:36px;height:36px;border-radius:50%;flex-shrink:0">' : "")
+      + (cfg.showPhoto && r.avatar ? '<img src="' + safeSrc(r.avatar) + '" style="width:36px;height:36px;border-radius:50%;flex-shrink:0">' : "")
       + '<div>'
-      + (cfg.showName ? '<div style="font-weight:700;font-size:13px">' + r.author + '</div>' : "")
+      + (cfg.showName ? '<div style="font-weight:700;font-size:13px">' + escapeHtml(r.author) + '</div>' : "")
       + (cfg.showStars ? '<div>' + stars(r.rating) + '</div>' : "")
       + '</div></div>'
       + '<p style="margin:0;font-size:13px;line-height:1.6;color:' + cfg.textColor + 'cc">' + readMore + '</p>'
@@ -749,7 +764,7 @@ app.get("/widget.js", async (_req, res) => {
       const cta = document.createElement("div");
       cta.style.textAlign = "center";
       cta.style.marginTop = "18px";
-      cta.innerHTML = '<a href="'+cfg.ctaLink+'" style="display:inline-block;padding:11px 28px;border-radius:8px;background:'+cfg.ctaColor+';color:#fff;font-weight:700;font-size:14px;text-decoration:none">'+cfg.ctaText+'</a>';
+      cta.innerHTML = '<a href="'+safeSrc(cfg.ctaLink)+'" style="display:inline-block;padding:11px 28px;border-radius:8px;background:'+cfg.ctaColor+';color:#fff;font-weight:700;font-size:14px;text-decoration:none">'+escapeHtml(cfg.ctaText)+'</a>';
       el.appendChild(cta);
     }
   }
